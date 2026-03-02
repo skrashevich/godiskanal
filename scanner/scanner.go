@@ -81,6 +81,13 @@ func Scan(ctx context.Context, root string, opts Options, progressFn func(files,
 		dirTimeout = 3 * time.Second
 	}
 
+	type inodeKey struct {
+		dev uint64
+		ino uint64
+	}
+	var seenFileInodes sync.Map // inodeKey → struct{}{} (file hard-link dedup)
+	var seenDirInodes  sync.Map // inodeKey → struct{}{} (directory dedup incl. firmlinks)
+
 	var (
 		mu           sync.Mutex
 		dirSizes     = make(map[string]int64)
@@ -126,12 +133,19 @@ func Scan(ctx context.Context, root string, opts Options, progressFn func(files,
 				if excludeSet[entryPath] {
 					continue
 				}
-				if opts.OneFilesystem {
-					var st syscall.Stat_t
-					if err := syscall.Lstat(entryPath, &st); err == nil {
-						if uint64(st.Dev) != rootDev {
-							continue
-						}
+				// Lstat every subdirectory to:
+				// 1. Deduplicate by inode — APFS firmlinks (/Users, /Applications, etc.)
+				//    are directory hardlinks that share an inode with their target under
+				//    /System/Volumes/Data/. Without this, each firmlink is scanned twice.
+				// 2. Enforce OneFilesystem (skip different-device mount points).
+				var st syscall.Stat_t
+				if err := syscall.Lstat(entryPath, &st); err == nil {
+					key := inodeKey{dev: uint64(st.Dev), ino: uint64(st.Ino)}
+					if _, loaded := seenDirInodes.LoadOrStore(key, struct{}{}); loaded {
+						continue // already queued via another path (firmlink or bind mount)
+					}
+					if opts.OneFilesystem && uint64(st.Dev) != rootDev {
+						continue
 					}
 				}
 				mu.Lock()
@@ -155,7 +169,23 @@ func Scan(ctx context.Context, root string, opts Options, progressFn func(files,
 				continue
 			}
 
-			size := info.Size()
+			// Use actual allocated blocks (stat.Blocks * 512) instead of logical size.
+			// This correctly handles sparse files (Docker disk images, VM disks) and
+			// not-yet-downloaded iCloud stubs, where logical size >> physical usage.
+			// Also deduplicates hard links by inode.
+			var size int64
+			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+				if stat.Nlink > 1 {
+					key := inodeKey{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
+					if _, loaded := seenFileInodes.LoadOrStore(key, struct{}{}); loaded {
+						fileCount.Add(1)
+						continue
+					}
+				}
+				size = int64(stat.Blocks) * 512
+			} else {
+				size = info.Size()
+			}
 			localSize += size
 
 			n := fileCount.Add(1)
@@ -170,7 +200,11 @@ func Scan(ctx context.Context, root string, opts Options, progressFn func(files,
 		mu.Unlock()
 	}
 
-	// Register root and kick off
+	// Register root and kick off; seed seenDirInodes so alternate paths to root are skipped.
+	var rootSt syscall.Stat_t
+	if syscall.Lstat(root, &rootSt) == nil {
+		seenDirInodes.Store(inodeKey{dev: uint64(rootSt.Dev), ino: uint64(rootSt.Ino)}, struct{}{})
+	}
 	mu.Lock()
 	dirSizes[root] = 0
 	mu.Unlock()
