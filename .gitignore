@@ -1,0 +1,33 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/godiskanal
+/main
+
+# Test binary, coverage and profiling
+*.test
+*.out
+*.coverprofile
+coverage.out
+
+# Dependency directories (remove if you vendor dependencies)
+/vendor/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# macOS
+.DS_Store
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local tool settings
+.claude/
