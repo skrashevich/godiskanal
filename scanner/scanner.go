@@ -182,7 +182,7 @@ func Scan(ctx context.Context, root string, opts Options, progressFn func(files,
 						continue
 					}
 				}
-				size = int64(stat.Blocks) * 512
+				size = int64(stat.Blocks) * 512 // TODO: избавиться от хардкода 512
 			} else {
 				size = info.Size()
 			}
