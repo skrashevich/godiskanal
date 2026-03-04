@@ -39,7 +39,11 @@ type KnownLocation struct {
 	Exists      bool  // populated by PopulateSizes
 	Cleanable   bool
 	CleanNote   string
-	CleanFn     func() error // nil means use RemoveAll
+	// CleanFn is the cleanup function. If nil and Cleanable=true, RemoveAll(Path) is used.
+	CleanFn func() error
+	// CommandOnly means the cleanup MUST go through CleanFn (e.g. Docker, iOS simulators).
+	// TUI cleanup skips these items and tells the user to run the command manually.
+	CommandOnly bool
 }
 
 // DefaultLocations returns the list of well-known macOS space consumers.
@@ -71,6 +75,7 @@ func DefaultLocations(home string) []KnownLocation {
 			Path:        filepath.Join(home, "Library/Developer/CoreSimulator/Devices"),
 			Description: "Образы iOS-симуляторов",
 			Cleanable:   true,
+			CommandOnly: true, // must use simctl, not RemoveAll
 			CleanNote:   "xcrun simctl delete unavailable",
 			CleanFn: func() error {
 				return exec.Command("xcrun", "simctl", "delete", "unavailable").Run()
@@ -346,6 +351,7 @@ func DefaultLocations(home string) []KnownLocation {
 				Path:        p,
 				Description: "Docker образы и данные",
 				Cleanable:   true,
+				CommandOnly: true, // must use docker daemon, not RemoveAll
 				CleanNote:   "docker system prune -a --volumes",
 				CleanFn: func() error {
 					return exec.Command("docker", "system", "prune", "-a", "--volumes", "-f").Run()

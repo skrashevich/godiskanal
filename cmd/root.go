@@ -1,14 +1,12 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,6 +51,18 @@ iCloud и др.) и помогает освободить пространств
   • Прогресс показывает текущий каталог, адаптируется под ширину терминала
   • Директории, не ответившие за 3 секунды (iCloud, NFS), пропускаются
   • Ctrl+C прерывает сканирование и выводит частичные результаты
+
+Браузер диска (--browse / -b):
+  • ncdu-подобный TUI с навигацией по дереву директорий
+  • Отображает размеры файлов и папок с визуальными барами
+  • Пробел — отметить для удаления, d — удалить отмеченное
+  • i — получить объяснение от LLM (если передан API ключ)
+
+Интерактивная очистка (-i):
+  • TUI-интерфейс с выбором очищаемых директорий через пробел
+  • Показывает размеры и прогресс-бары, сортирует по объёму
+  • Запрашивает подтверждение перед удалением
+  • Docker и iOS Simulators требуют ручного запуска команды
 
 Переменные окружения:
   OPENAI_API_KEY   API ключ (если не указан --api-key)
@@ -238,9 +248,17 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 7. Interactive cleanup
+	// 7. Interactive cleanup (TUI)
 	if interactive {
-		runInteractiveCleanup(locs, home)
+		m := tui.NewCleanup(locs)
+		if !m.HasItems() {
+			fmt.Println("\n  Нет подходящих для очистки директорий.")
+		} else {
+			p := tea.NewProgram(m, tea.WithAltScreen())
+			if _, err := p.Run(); err != nil {
+				return fmt.Errorf("ошибка TUI очистки: %w", err)
+			}
+		}
 	} else if !useLLM {
 		printQuickTips(locs)
 	}
@@ -288,138 +306,6 @@ func buildLLMPrompt(disk *macos.DiskInfo, top []scanner.Entry, locs []macos.Know
 	b.WriteString("Для каждого пункта укажи ожидаемый объём освобождаемого места и точную команду или действие.")
 
 	return b.String()
-}
-
-// runInteractiveCleanup shows an interactive cleanup menu.
-func runInteractiveCleanup(locs []macos.KnownLocation, home string) {
-	// Build cleanup actions from cleanable locations with significant size
-	type action struct {
-		name    string
-		size    int64
-		path    string
-		cleanFn func() error
-		note    string
-	}
-
-	var actions []action
-	for _, loc := range locs {
-		if !loc.Exists || !loc.Cleanable || loc.Size < 10*1024*1024 {
-			continue
-		}
-		fn := loc.CleanFn
-		path := loc.Path
-		note := loc.CleanNote
-		if fn == nil {
-			fn = func() error {
-				return removeAllContents(path)
-			}
-		}
-		actions = append(actions, action{
-			name:    loc.Name,
-			size:    loc.Size,
-			path:    path,
-			cleanFn: fn,
-			note:    note,
-		})
-	}
-
-	if len(actions) == 0 {
-		fmt.Println("\n  Нет подходящих для очистки директорий.")
-		return
-	}
-
-	// Sort by size desc
-	sort.Slice(actions, func(i, j int) bool {
-		return actions[i].size > actions[j].size
-	})
-
-	ui.Header("ОЧИСТКА")
-	totalCleanable := int64(0)
-	for i, a := range actions {
-		ui.PrintCleanAction(i+1, a.name, a.size)
-		if a.note != "" {
-			fmt.Printf("       \033[2m%s\033[0m\n", a.note)
-		}
-		totalCleanable += a.size
-	}
-	fmt.Printf("\n  Потенциально освободить: \033[1m%s\033[0m\n", ui.FormatSize(totalCleanable))
-
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("\nВыберите действия (например: 1,3 или all, q для выхода): ")
-	input, _ := reader.ReadString('\n')
-	input = strings.TrimSpace(input)
-
-	if input == "q" || input == "" {
-		fmt.Println("Отмена.")
-		return
-	}
-
-	var selected []int
-	if strings.ToLower(input) == "all" {
-		for i := range actions {
-			selected = append(selected, i)
-		}
-	} else {
-		for _, part := range strings.Split(input, ",") {
-			part = strings.TrimSpace(part)
-			n, err := strconv.Atoi(part)
-			if err != nil || n < 1 || n > len(actions) {
-				fmt.Printf("  Пропускаю некорректный номер: %q\n", part)
-				continue
-			}
-			selected = append(selected, n-1)
-		}
-	}
-
-	if len(selected) == 0 {
-		fmt.Println("Ничего не выбрано.")
-		return
-	}
-
-	// Confirm
-	fmt.Printf("\nБудет очищено:\n")
-	totalSize := int64(0)
-	for _, idx := range selected {
-		a := actions[idx]
-		fmt.Printf("  • %s (%s)\n", a.name, ui.FormatSize(a.size))
-		totalSize += a.size
-	}
-	fmt.Printf("Итого: %s\n", ui.FormatSize(totalSize))
-	fmt.Printf("\033[1mПродолжить? [y/N]: \033[0m")
-
-	confirm, _ := reader.ReadString('\n')
-	confirm = strings.TrimSpace(strings.ToLower(confirm))
-	if confirm != "y" && confirm != "да" {
-		fmt.Println("Отмена.")
-		return
-	}
-
-	// Execute
-	fmt.Println()
-	for _, idx := range selected {
-		a := actions[idx]
-		fmt.Printf("  Очистка %s... ", a.name)
-		if err := a.cleanFn(); err != nil {
-			fmt.Printf("\033[31mошибка: %v\033[0m\n", err)
-		} else {
-			fmt.Printf("\033[32mготово\033[0m\n")
-		}
-	}
-	fmt.Printf("\n  ✓ Очистка завершена\n")
-}
-
-// removeAllContents removes the contents of a directory (not the directory itself).
-func removeAllContents(path string) error {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(path, entry.Name())); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // printQuickTips shows a brief summary of actionable items.

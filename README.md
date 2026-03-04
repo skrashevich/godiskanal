@@ -27,11 +27,17 @@ godiskanal
 # Не пересекать границы ФС (быстрее, пропускает внешние тома)
 godiskanal -x
 
+# TUI-браузер диска (ncdu-подобный)
+godiskanal -b
+
+# TUI-браузер с LLM-описаниями (нажмите i на любом элементе)
+godiskanal -b --llm
+
+# Интерактивная TUI-очистка известных мест
+godiskanal -i
+
 # С рекомендациями от ИИ
 godiskanal --llm
-
-# Интерактивная очистка
-godiskanal -i
 
 # Всё вместе
 godiskanal --llm -i -x
@@ -58,11 +64,12 @@ godiskanal --llm -i -x
 | `--api-url` | — | Базовый URL API (или `OPENAI_BASE_URL`) |
 | `--model` | `gpt-4o-mini` | Модель LLM |
 
-### Очистка
+### Браузер и очистка
 
 | Флаг | По умолчанию | Описание |
 |---|---|---|
-| `-i, --interactive` | `false` | Интерактивный режим очистки |
+| `-b, --browse` | `false` | TUI-браузер диска с навигацией и удалением |
+| `-i, --interactive` | `false` | TUI-очистка известных мест (кэши, артефакты) |
 
 ## Сканирование
 
@@ -177,24 +184,50 @@ godiskanal --llm
 Формирует промпт с данными сканирования и стримит ответ от LLM в терминал.
 После завершения выводит потраченные токены и стоимость запроса.
 
-### 3. Интерактивная очистка
+### 3. TUI-браузер диска
+
+```bash
+godiskanal -b
+```
+
+Открывает ncdu-подобный интерфейс для навигации по дереву директорий. Управление:
+
+| Клавиша | Действие |
+|---|---|
+| `↑↓` / `jk` | Навигация |
+| `Enter` / `→` | Войти в директорию |
+| `←` / `Esc` | Вернуться назад |
+| `Space` | Отметить для удаления |
+| `d` | Удалить отмеченные |
+| `D` | Удалить текущий элемент |
+| `i` | Описание от LLM (нужен API ключ) |
+| `?` | Помощь |
+| `q` | Выйти |
+
+```bash
+# С LLM-описаниями (нажмите i на любом элементе)
+godiskanal -b --llm
+```
+
+### 4. Интерактивная TUI-очистка
 
 ```bash
 godiskanal -i
 ```
 
-После сканирования показывает меню с очищаемыми директориями, запрашивает подтверждение
-и выполняет очистку.
+TUI-интерфейс со списком известных мест (кэши, артефакты сборки, старые backups).
+Пробел выбирает элементы, Enter запускает очистку с подтверждением.
+Docker и iOS Simulators помечаются отдельно с инструкцией по ручной очистке.
 
-### 4. Полный сценарий
+### 5. Полный сценарий
 
 ```bash
 godiskanal --llm -i -x
 ```
 
-Параллельное сканирование без пересечения границ ФС → рекомендации от ИИ → интерактивная очистка.
+Параллельное сканирование без пересечения границ ФС → рекомендации от ИИ → TUI-очистка.
 
-### 5. Сканирование конкретного пути
+### 6. Сканирование конкретного пути
 
 ```bash
 godiskanal --path ~/Projects --llm
@@ -205,23 +238,63 @@ godiskanal --path /Users/shared --top 30
 
 ## Что проверяется автоматически
 
+### macOS
+
 | Локация | Описание |
 |---|---|
 | `~/Library/Caches` | Кэши всех приложений |
 | `~/Library/Developer/Xcode/DerivedData` | Артефакты сборки Xcode |
-| `~/Library/Developer/CoreSimulator/Devices` | Образы iOS-симуляторов |
+| `~/Library/Developer/CoreSimulator/Devices` | Образы iOS-симуляторов¹ |
 | `~/Library/Developer/Xcode/iOS DeviceSupport` | Символы отладки устройств |
 | `~/Library/Application Support/MobileSync/Backup` | Резервные копии iPhone/iPad |
 | `~/.Trash` | Корзина |
 | `~/Downloads` | Загрузки |
+| Homebrew cache | Определяется через `brew --cache` |
+| Time Machine snapshots | Локальные снимки (`tmutil`) |
+
+### Инструменты разработки
+
+| Локация | Описание |
+|---|---|
 | `~/.npm` | Кэш npm |
 | `~/.yarn/cache` | Кэш Yarn |
 | `~/.pnpm-store` | Хранилище pnpm |
+| `~/.bun/install` | Кэш Bun |
 | `~/go/pkg/mod` | Кэш Go-модулей |
+| `~/Library/Caches/go-build` | Кэш сборки Go |
 | `~/.gradle/caches` | Кэш Gradle |
 | `~/.m2/repository` | Репозиторий Maven |
 | `~/.cargo` | Кэш Rust/Cargo |
-| `~/Library/Containers/com.docker.docker` | Docker образы и данные |
-| Homebrew cache | Определяется через `brew --cache` |
-| Time Machine snapshots | Локальные снимки (`tmutil`) |
-| `node_modules` | Любые крупные node_modules в дереве |
+| `~/.rustup/toolchains` | Установленные тулчейны Rust |
+| `~/.cocoapods` | Кэш CocoaPods |
+| `~/.node-gyp` | Кэш нативных Node.js модулей |
+| `~/.pub-cache` | Кэш Dart/Flutter |
+| `~/.nuget/packages` | Кэш NuGet (.NET) |
+| `~/.platformio` | Тулчейны PlatformIO |
+| `~/Library/Caches/pip` | Кэш Python pip |
+| `~/.venv` | Python виртуальное окружение |
+| `~/.cache/uv` | Кэш пакетного менеджера uv |
+| `~/Library/Containers/com.docker.docker` | Docker образы и данные¹ |
+
+### AI / ML
+
+| Локация | Описание |
+|---|---|
+| `~/.cache/huggingface` | Локальные модели HuggingFace |
+| `~/.cache/whisper` | Модели OpenAI Whisper |
+| `~/.continue/index` | Поисковый индекс Continue AI |
+
+### Браузеры / Electron
+
+| Локация | Описание |
+|---|---|
+| `~/.cache/puppeteer` | Chromium для Puppeteer |
+| `~/.cache/electron` | Кэш Electron SDK |
+
+### node_modules
+
+| | |
+|---|---|
+| `node_modules` | Любые крупные node_modules в дереве сканирования (>200 MB) |
+
+¹ Требует ручной команды (`xcrun simctl delete unavailable` / `docker system prune`), отображается отдельно в TUI.
