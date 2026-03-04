@@ -250,7 +250,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// 7. Interactive cleanup (TUI)
 	if interactive {
-		m := tui.NewCleanup(locs)
+		m := tui.NewCleanup(locs, sizeMap)
 		if !m.HasItems() {
 			fmt.Println("\n  Нет подходящих для очистки директорий.")
 		} else {

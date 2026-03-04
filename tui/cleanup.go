@@ -17,58 +17,94 @@ import (
 
 var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-type cleanTickMsg struct{}
-
 func cleanTick() tea.Cmd {
 	return tea.Every(120*time.Millisecond, func(time.Time) tea.Msg { return cleanTickMsg{} })
 }
 
-// ─── Cleanup-specific types ───────────────────────────────────────────────────
+// ─── Modes ────────────────────────────────────────────────────────────────────
 
 type cleanMode int
 
 const (
-	cleanSelect   cleanMode = iota // browsing + marking items
-	cleanConfirm                   // "are you sure?" dialog
-	cleanRunning                   // executing cleanup actions
-	cleanDone                      // finished, showing results
+	cleanSelect       cleanMode = iota
+	cleanDrill                  // browsing directory contents
+	cleanDrillConfirm           // confirm drill selection
+	cleanDrillRunning           // running drill cleanup
+	cleanDrillDone              // drill cleanup complete → returns to cleanSelect
+	cleanConfirm                // confirm main-list selection
+	cleanRunning                // running main-list cleanup
+	cleanDone                   // main-list cleanup complete
 )
 
-type cleanEntry struct {
-	loc      macos.KnownLocation
-	selected bool
-	cleaning bool // currently running
-	cleaned  bool
-	err      error
-}
+// ─── Message types ────────────────────────────────────────────────────────────
+
+type cleanTickMsg struct{}
 
 type cleanItemDoneMsg struct {
 	idx int
 	err error
 }
 
+type drillLoadedMsg struct {
+	entries []drillEntry
+	maxSize int64
+}
+
+type drillItemDoneMsg struct {
+	idx int
+	err error
+}
+
+// ─── Entry types ──────────────────────────────────────────────────────────────
+
+type cleanEntry struct {
+	loc      macos.KnownLocation
+	selected bool
+	cleaning bool
+	cleaned  bool
+	err      error
+}
+
+type drillEntry struct {
+	name     string
+	path     string
+	size     int64 // -1 = unknown
+	isDir    bool
+	selected bool
+	cleaning bool
+	cleaned  bool
+	err      error
+}
+
 // ─── CleanupModel ─────────────────────────────────────────────────────────────
 
-// CleanupModel is the bubbletea model for the interactive cleanup selector.
 type CleanupModel struct {
+	// main list
 	items   []cleanEntry
 	maxSize int64
+	cursor  int
+	offset  int
 
-	cursor       int
-	offset       int
 	width        int
 	height       int
 	mode         cleanMode
 	spinnerFrame int
 
-	// CommandOnly items excluded from TUI — listed separately for info
 	commandOnly []macos.KnownLocation
+	sizeMap     map[string]int64
+
+	// drill-down state
+	drillParentName string
+	drillParentPath string
+	drillEntries    []drillEntry
+	drillMaxSize    int64
+	drillCursor     int
+	drillOffset     int
 }
 
 // NewCleanup creates a cleanup TUI model from populated KnownLocations.
-// Items with Cleanable=false or that don't exist are excluded.
-// CommandOnly items (Docker, iOS sims) are listed separately for info.
-func NewCleanup(locs []macos.KnownLocation) CleanupModel {
+// sizeMap is the scanner size cache used for directory sizes in drill-down.
+func NewCleanup(locs []macos.KnownLocation, sizeMap map[string]int64) CleanupModel {
 	var items []cleanEntry
 	var cmdOnly []macos.KnownLocation
 	var maxSize int64
@@ -88,10 +124,14 @@ func NewCleanup(locs []macos.KnownLocation) CleanupModel {
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].loc.Size > items[j].loc.Size
 	})
+	if sizeMap == nil {
+		sizeMap = map[string]int64{}
+	}
 	return CleanupModel{
 		items:       items,
 		commandOnly: cmdOnly,
 		maxSize:     maxSize,
+		sizeMap:     sizeMap,
 		width:       80,
 		height:      24,
 	}
@@ -112,17 +152,17 @@ func (m CleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case cleanTickMsg:
-		if m.mode == cleanRunning {
+		if m.mode == cleanRunning || m.mode == cleanDrillRunning {
 			m.spinnerFrame++
 			return m, cleanTick()
 		}
 		return m, nil
 
+	// ── main list cleanup events ───────────────────────────────────────────
 	case cleanItemDoneMsg:
 		m.items[msg.idx].cleaning = false
 		m.items[msg.idx].cleaned = true
 		m.items[msg.idx].err = msg.err
-		// Launch next pending item
 		for i, it := range m.items {
 			if it.selected && !it.cleaned {
 				m.items[i].cleaning = true
@@ -130,6 +170,29 @@ func (m CleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.mode = cleanDone
+		return m, nil
+
+	// ── drill-down events ──────────────────────────────────────────────────
+	case drillLoadedMsg:
+		m.drillEntries = msg.entries
+		m.drillMaxSize = msg.maxSize
+		m.drillCursor = 0
+		m.drillOffset = 0
+		// transition to drill mode only after load completes
+		m.mode = cleanDrill
+		return m, nil
+
+	case drillItemDoneMsg:
+		m.drillEntries[msg.idx].cleaning = false
+		m.drillEntries[msg.idx].cleaned = true
+		m.drillEntries[msg.idx].err = msg.err
+		for i, e := range m.drillEntries {
+			if e.selected && !e.cleaned {
+				m.drillEntries[i].cleaning = true
+				return m, cmdCleanDrillEntry(i, e.path)
+			}
+		}
+		m.mode = cleanDrillDone
 		return m, nil
 
 	case tea.KeyMsg:
@@ -141,7 +204,45 @@ func (m CleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// ── confirm dialog ────────────────────────────────────────────────────────
+	// ── drill confirm ──────────────────────────────────────────────────────
+	if m.mode == cleanDrillConfirm {
+		switch key {
+		case "y", "Y":
+			m.mode = cleanDrillRunning
+			for i, e := range m.drillEntries {
+				if e.selected {
+					m.drillEntries[i].cleaning = true
+					return m, tea.Batch(cmdCleanDrillEntry(i, e.path), cleanTick())
+				}
+			}
+			m.mode = cleanDrillDone
+		default:
+			m.mode = cleanDrill
+		}
+		return m, nil
+	}
+
+	// ── drill running: block all except hard quit ──────────────────────────
+	if m.mode == cleanDrillRunning {
+		if key == "ctrl+c" {
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
+	// ── drill done: any key → back to main list ────────────────────────────
+	if m.mode == cleanDrillDone {
+		m.mode = cleanSelect
+		m.drillEntries = nil
+		return m, nil
+	}
+
+	// ── drill select ───────────────────────────────────────────────────────
+	if m.mode == cleanDrill {
+		return m.handleDrillKey(key)
+	}
+
+	// ── main confirm ───────────────────────────────────────────────────────
 	if m.mode == cleanConfirm {
 		switch key {
 		case "y", "Y":
@@ -152,14 +253,14 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(cmdCleanEntry(i, it.loc), cleanTick())
 				}
 			}
-			m.mode = cleanDone // nothing selected somehow
+			m.mode = cleanDone
 		default:
 			m.mode = cleanSelect
 		}
 		return m, nil
 	}
 
-	// ── running: block all except hard quit ───────────────────────────────────
+	// ── main running: block all except hard quit ───────────────────────────
 	if m.mode == cleanRunning {
 		if key == "ctrl+c" {
 			return m, tea.Quit
@@ -167,12 +268,12 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// ── done: any key exits ───────────────────────────────────────────────────
+	// ── main done: any key exits ───────────────────────────────────────────
 	if m.mode == cleanDone {
 		return m, tea.Quit
 	}
 
-	// ── select mode ───────────────────────────────────────────────────────────
+	// ── main select mode ───────────────────────────────────────────────────
 	listH := m.listHeight()
 
 	switch key {
@@ -219,7 +320,6 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		if len(m.items) > 0 {
 			m.items[m.cursor].selected = !m.items[m.cursor].selected
-			// Advance cursor
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
 				if m.cursor >= m.offset+listH {
@@ -240,7 +340,22 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.items[i].selected = !allOn
 		}
 
-	case "enter", "c", "C":
+	case "enter":
+		// Drill into the item under cursor (if it has a path to browse)
+		if len(m.items) > 0 {
+			it := m.items[m.cursor]
+			if it.loc.Path != "" {
+				m.drillParentName = it.loc.Name
+				m.drillParentPath = it.loc.Path
+				// Show loading immediately; drillLoadedMsg will transition to cleanDrill
+				m.mode = cleanDrill
+				m.drillEntries = nil
+				return m, cmdLoadDrillEntries(it.loc.Path, m.sizeMap)
+			}
+		}
+
+	case "c", "C":
+		// Confirm bulk cleanup of selected items
 		for _, it := range m.items {
 			if it.selected {
 				m.mode = cleanConfirm
@@ -252,22 +367,131 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m CleanupModel) handleDrillKey(key string) (tea.Model, tea.Cmd) {
+	listH := m.drillListHeight()
+
+	switch key {
+	case "q", "esc", "backspace", "left", "h":
+		m.mode = cleanSelect
+		m.drillEntries = nil
+		return m, nil
+
+	case "ctrl+c":
+		return m, tea.Quit
+
+	case "up", "k":
+		if m.drillCursor > 0 {
+			m.drillCursor--
+			if m.drillCursor < m.drillOffset {
+				m.drillOffset = m.drillCursor
+			}
+		}
+
+	case "down", "j":
+		if m.drillCursor < len(m.drillEntries)-1 {
+			m.drillCursor++
+			if m.drillCursor >= m.drillOffset+listH {
+				m.drillOffset++
+			}
+		}
+
+	case "pgup":
+		m.drillCursor = max(0, m.drillCursor-listH)
+		m.drillOffset = max(0, m.drillOffset-listH)
+
+	case "pgdown":
+		if n := len(m.drillEntries); n > 0 {
+			m.drillCursor = min(n-1, m.drillCursor+listH)
+			if m.drillCursor >= m.drillOffset+listH {
+				m.drillOffset = m.drillCursor - listH + 1
+			}
+		}
+
+	case "home", "g":
+		m.drillCursor, m.drillOffset = 0, 0
+
+	case "end", "G":
+		if n := len(m.drillEntries); n > 0 {
+			m.drillCursor = n - 1
+			m.drillOffset = max(0, n-listH)
+		}
+
+	case " ":
+		if len(m.drillEntries) > 0 {
+			m.drillEntries[m.drillCursor].selected = !m.drillEntries[m.drillCursor].selected
+			if m.drillCursor < len(m.drillEntries)-1 {
+				m.drillCursor++
+				if m.drillCursor >= m.drillOffset+listH {
+					m.drillOffset++
+				}
+			}
+		}
+
+	case "a", "A":
+		allOn := true
+		for _, e := range m.drillEntries {
+			if !e.selected {
+				allOn = false
+				break
+			}
+		}
+		for i := range m.drillEntries {
+			m.drillEntries[i].selected = !allOn
+		}
+
+	case "enter", "c", "C", "d", "D":
+		for _, e := range m.drillEntries {
+			if e.selected {
+				m.mode = cleanDrillConfirm
+				break
+			}
+		}
+	}
+
+	return m, nil
+}
+
 // ─── View ─────────────────────────────────────────────────────────────────────
 
 func (m CleanupModel) View() string {
-	hdr := m.renderHeader()
 	switch m.mode {
+	case cleanDrill:
+		if m.drillEntries == nil {
+			// Still loading
+			hdr := m.renderDrillHeader()
+			sep := styleSep.Render(strings.Repeat("─", m.width))
+			spin := spinFrames[m.spinnerFrame%len(spinFrames)]
+			return hdr + "\n" + spin + " Загрузка содержимого...\n" + sep
+		}
+		return m.renderDrillHeader() + "\n" + m.renderDrillList() + m.renderDrillFooter()
+
+	case cleanDrillConfirm:
+		return m.renderDrillHeader() + "\n" + m.renderDrillConfirm()
+
+	case cleanDrillRunning:
+		return m.renderDrillHeader() + "\n" + m.renderDrillRunning()
+
+	case cleanDrillDone:
+		return m.renderDrillHeader() + "\n" + m.renderDrillDone()
+
 	case cleanConfirm:
+		hdr := m.renderHeader()
 		return hdr + "\n" + m.renderConfirm()
+
 	case cleanRunning:
+		hdr := m.renderHeader()
 		return hdr + "\n" + m.renderRunning()
+
 	case cleanDone:
+		hdr := m.renderHeader()
 		return hdr + "\n" + m.renderDone()
 	}
+
+	hdr := m.renderHeader()
 	return hdr + "\n" + m.renderList() + m.renderFooter()
 }
 
-// ── header ───────────────────────────────────────────────────────────────────
+// ── main list header ──────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderHeader() string {
 	title := styleHeader.Render("godiskanal — Интерактивная очистка")
@@ -289,13 +513,12 @@ func (m CleanupModel) renderHeader() string {
 	return title + sel + "\n" + sep
 }
 
-// ── select list ───────────────────────────────────────────────────────────────
+// ── main list ─────────────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderList() string {
 	var b strings.Builder
 	listH := m.listHeight()
 
-	// Reserve 1 line for CleanNote of the current item (if any)
 	noteVisible := m.cursor >= 0 && m.cursor < len(m.items) &&
 		m.items[m.cursor].loc.CleanNote != ""
 	rowH := listH
@@ -315,13 +538,10 @@ func (m CleanupModel) renderList() string {
 		b.WriteString("\n")
 	}
 
-	// CleanNote line
 	if noteVisible {
 		note := m.items[m.cursor].loc.CleanNote
-		noteStr := "  " + styleDim.Render("↳ "+truncate(note, m.width-6))
-		b.WriteString(noteStr + "\n")
+		b.WriteString("  " + styleDim.Render("↳ "+truncate(note, m.width-6)) + "\n")
 	}
-
 	return b.String()
 }
 
@@ -329,28 +549,21 @@ func (m CleanupModel) renderEntry(i int) string {
 	it := m.items[i]
 	isCursor := i == m.cursor
 
-	// Cursor (2 chars)
 	cur := "  "
 	if isCursor {
 		cur = styleBold.Render("► ")
 	}
 
-	// Checkbox (4 chars including trailing space)
 	check := "[ ] "
 	if it.selected {
 		check = styleMarked.Render("[✓]") + " "
 	}
 
-	// Size (sizeWidth, right-aligned)
 	sz := fmt.Sprintf("%*s", sizeWidth, ui.FormatSize(it.loc.Size))
 	sz = colorSize(it.loc.Size, sz)
-
-	// Bar
 	bar := makeBar(it.loc.Size, m.maxSize, barWidth)
 
-	// Name (remaining width)
 	name := it.loc.Name
-	// cur(2) + check(4) + size(9) + sp(1) + bar(20) + sp(2)
 	fixedCols := 2 + 4 + sizeWidth + 1 + barWidth + 2
 	nameW := m.width - fixedCols
 	if nameW < 4 {
@@ -364,17 +577,17 @@ func (m CleanupModel) renderEntry(i int) string {
 	return fmt.Sprintf("%s%s%s %s  %s", cur, check, sz, bar, name)
 }
 
-// ── footer ────────────────────────────────────────────────────────────────────
+// ── main footer ───────────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderFooter() string {
 	sep := styleSep.Render(strings.Repeat("─", m.width))
 	hints := styleDim.Render(
-		"↑↓/jk нав.  Space выбрать  a все/сброс  Enter очистить  q выйти",
+		"↑↓/jk нав.  Space выбрать  a все/сброс  Enter детали  c очистить  q выйти",
 	)
 	return sep + "\n" + hints
 }
 
-// ── confirm ───────────────────────────────────────────────────────────────────
+// ── main confirm ──────────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderConfirm() string {
 	var total int64
@@ -398,7 +611,7 @@ func (m CleanupModel) renderConfirm() string {
 	return b.String()
 }
 
-// ── running ───────────────────────────────────────────────────────────────────
+// ── main running ──────────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderRunning() string {
 	var b strings.Builder
@@ -407,7 +620,7 @@ func (m CleanupModel) renderRunning() string {
 		if !it.selected {
 			continue
 		}
-		icon, status := m.runningItemStatus(it)
+		icon, status := m.runningItemStatus(it.cleaning, it.cleaned, it.err)
 		sz := fmt.Sprintf("%9s", ui.FormatSize(it.loc.Size))
 		b.WriteString(fmt.Sprintf("  %s  %s  %-28s  %s\n",
 			icon, sz, truncate(it.loc.Name, 28), status))
@@ -415,21 +628,7 @@ func (m CleanupModel) renderRunning() string {
 	return b.String()
 }
 
-func (m CleanupModel) runningItemStatus(it cleanEntry) (icon, status string) {
-	switch {
-	case it.err != nil:
-		return "✗", styleDim.Render("ошибка: "+it.err.Error())
-	case it.cleaned:
-		return "✓", styleDim.Render("готово")
-	case it.cleaning:
-		spin := spinFrames[m.spinnerFrame%len(spinFrames)]
-		return spin, styleDim.Render("очищаю...")
-	default:
-		return "○", styleDim.Render("ожидание")
-	}
-}
-
-// ── done ──────────────────────────────────────────────────────────────────────
+// ── main done ─────────────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderDone() string {
 	var b strings.Builder
@@ -441,7 +640,7 @@ func (m CleanupModel) renderDone() string {
 		if !it.selected {
 			continue
 		}
-		icon, st := m.runningItemStatus(it)
+		icon, st := m.runningItemStatus(it.cleaning, it.cleaned, it.err)
 		sz := fmt.Sprintf("%9s", ui.FormatSize(it.loc.Size))
 		b.WriteString(fmt.Sprintf("  %s  %s  %-28s  %s\n",
 			icon, sz, truncate(it.loc.Name, 28), st))
@@ -456,7 +655,6 @@ func (m CleanupModel) renderDone() string {
 	if errs > 0 {
 		b.WriteString(fmt.Sprintf("  (%d ошибок)", errs))
 	}
-	// Show CommandOnly items that need manual cleanup
 	if len(m.commandOnly) > 0 {
 		b.WriteString("\n\n  Требуют ручной очистки (запустите команду):\n")
 		for _, loc := range m.commandOnly {
@@ -468,10 +666,198 @@ func (m CleanupModel) renderDone() string {
 	return b.String()
 }
 
+// ── drill header ──────────────────────────────────────────────────────────────
+
+func (m CleanupModel) renderDrillHeader() string {
+	title := styleHeader.Render(fmt.Sprintf("godiskanal — %s", m.drillParentName))
+
+	var selCount int
+	var selSize int64
+	for _, e := range m.drillEntries {
+		if e.selected {
+			selCount++
+			if e.size > 0 {
+				selSize += e.size
+			}
+		}
+	}
+	sel := ""
+	if selCount > 0 {
+		sel = styleMarked.Render(fmt.Sprintf("  [*%d  %s]", selCount, ui.FormatSize(selSize)))
+	}
+
+	pathStr := styleDim.Render(truncate(m.drillParentPath, m.width-2))
+	sep := styleSep.Render(strings.Repeat("─", m.width))
+	return title + sel + "\n" + "  " + pathStr + "\n" + sep
+}
+
+// ── drill list ────────────────────────────────────────────────────────────────
+
+func (m CleanupModel) renderDrillList() string {
+	var b strings.Builder
+	listH := m.drillListHeight()
+	end := min(m.drillOffset+listH, len(m.drillEntries))
+
+	for i := m.drillOffset; i < end; i++ {
+		b.WriteString(m.renderDrillEntryRow(i))
+		b.WriteString("\n")
+	}
+	for i := end - m.drillOffset; i < listH; i++ {
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m CleanupModel) renderDrillEntryRow(i int) string {
+	e := m.drillEntries[i]
+	isCursor := i == m.drillCursor
+
+	cur := "  "
+	if isCursor {
+		cur = styleBold.Render("► ")
+	}
+
+	check := "[ ] "
+	if e.selected {
+		check = styleMarked.Render("[✓]") + " "
+	}
+
+	sz := fmt.Sprintf("%*s", sizeWidth, ui.FormatSize(e.size))
+	sz = colorSize(e.size, sz)
+	bar := makeBar(e.size, m.drillMaxSize, barWidth)
+
+	name := e.name
+	if e.isDir {
+		name += "/"
+	}
+	fixedCols := 2 + 4 + sizeWidth + 1 + barWidth + 2
+	nameW := m.width - fixedCols
+	if nameW < 4 {
+		nameW = 4
+	}
+	name = truncate(name, nameW)
+	if isCursor {
+		name = styleBold.Render(name)
+	}
+
+	return fmt.Sprintf("%s%s%s %s  %s", cur, check, sz, bar, name)
+}
+
+// ── drill footer ──────────────────────────────────────────────────────────────
+
+func (m CleanupModel) renderDrillFooter() string {
+	sep := styleSep.Render(strings.Repeat("─", m.width))
+	hints := styleDim.Render(
+		"↑↓/jk нав.  Space выбрать  a все/сброс  Enter/c удалить  Esc назад",
+	)
+	return sep + "\n" + hints
+}
+
+// ── drill confirm ─────────────────────────────────────────────────────────────
+
+func (m CleanupModel) renderDrillConfirm() string {
+	var total int64
+	var lines []string
+	for _, e := range m.drillEntries {
+		if !e.selected {
+			continue
+		}
+		sizeStr := ui.FormatSize(e.size)
+		if e.size < 0 {
+			sizeStr = "   —   "
+		} else {
+			total += e.size
+		}
+		lines = append(lines,
+			fmt.Sprintf("    • %-28s %s", truncate(e.name, 28), sizeStr))
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("\n  Удалить %d элемент(ов) (%s)?\n\n",
+		len(lines), ui.FormatSize(total)))
+	for _, l := range lines {
+		b.WriteString(l + "\n")
+	}
+	b.WriteString("\n  [y] Да, удалить  [любая другая клавиша] Отмена\n")
+	return b.String()
+}
+
+// ── drill running ─────────────────────────────────────────────────────────────
+
+func (m CleanupModel) renderDrillRunning() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	for _, e := range m.drillEntries {
+		if !e.selected {
+			continue
+		}
+		icon, status := m.runningItemStatus(e.cleaning, e.cleaned, e.err)
+		sz := fmt.Sprintf("%9s", ui.FormatSize(e.size))
+		b.WriteString(fmt.Sprintf("  %s  %s  %-28s  %s\n",
+			icon, sz, truncate(e.name, 28), status))
+	}
+	return b.String()
+}
+
+// ── drill done ────────────────────────────────────────────────────────────────
+
+func (m CleanupModel) renderDrillDone() string {
+	var b strings.Builder
+	b.WriteString("\n")
+
+	var freed int64
+	var errs int
+	for _, e := range m.drillEntries {
+		if !e.selected {
+			continue
+		}
+		icon, st := m.runningItemStatus(e.cleaning, e.cleaned, e.err)
+		sz := fmt.Sprintf("%9s", ui.FormatSize(e.size))
+		b.WriteString(fmt.Sprintf("  %s  %s  %-28s  %s\n",
+			icon, sz, truncate(e.name, 28), st))
+		if e.err != nil {
+			errs++
+		} else if e.size > 0 {
+			freed += e.size
+		}
+	}
+
+	b.WriteString(fmt.Sprintf("\n  Освобождено: ~%s", ui.FormatSize(freed)))
+	if errs > 0 {
+		b.WriteString(fmt.Sprintf("  (%d ошибок)", errs))
+	}
+	b.WriteString("\n\n  Нажмите любую клавишу для возврата к списку\n")
+	return b.String()
+}
+
+// ── shared status ─────────────────────────────────────────────────────────────
+
+func (m CleanupModel) runningItemStatus(cleaning, cleaned bool, err error) (icon, status string) {
+	switch {
+	case err != nil:
+		return "✗", styleDim.Render("ошибка: "+err.Error())
+	case cleaned:
+		return "✓", styleDim.Render("готово")
+	case cleaning:
+		spin := spinFrames[m.spinnerFrame%len(spinFrames)]
+		return spin, styleDim.Render("очищаю...")
+	default:
+		return "○", styleDim.Render("ожидание")
+	}
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func (m CleanupModel) listHeight() int {
-	h := m.height - 4 // header(2) + footer(2)
+	h := m.height - 4 // header(3 with path) + footer(2)
+	if h < 2 {
+		h = 2
+	}
+	return h
+}
+
+func (m CleanupModel) drillListHeight() int {
+	h := m.height - 5 // drill header(3) + footer(2)
 	if h < 2 {
 		h = 2
 	}
@@ -489,11 +875,80 @@ func truncate(s string, maxW int) string {
 	return string(runes[:maxW-1]) + "…"
 }
 
+// ─── Async commands ───────────────────────────────────────────────────────────
+
+// cmdLoadDrillEntries reads the directory and returns sizes from sizeMap (for dirs)
+// or os.Stat (for files). Sorting is by size descending.
+func cmdLoadDrillEntries(path string, sizeMap map[string]int64) tea.Cmd {
+	return func() tea.Msg {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return drillLoadedMsg{}
+		}
+
+		var items []drillEntry
+		var maxSize int64
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink != 0 {
+				continue
+			}
+			entryPath := filepath.Join(path, e.Name())
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+
+			var size int64
+			if e.IsDir() {
+				if s, ok := sizeMap[entryPath]; ok {
+					size = s
+				} else {
+					size = -1 // unknown — outside scan root or not yet scanned
+				}
+			} else {
+				size = info.Size()
+			}
+
+			items = append(items, drillEntry{
+				name:  e.Name(),
+				path:  entryPath,
+				size:  size,
+				isDir: e.IsDir(),
+			})
+			if size > maxSize {
+				maxSize = size
+			}
+		}
+
+		sort.Slice(items, func(i, j int) bool {
+			// unknown sizes (-1) go to the bottom
+			si, sj := items[i].size, items[j].size
+			if si < 0 && sj >= 0 {
+				return false
+			}
+			if sj < 0 && si >= 0 {
+				return true
+			}
+			if si != sj {
+				return si > sj
+			}
+			return items[i].name < items[j].name
+		})
+
+		return drillLoadedMsg{entries: items, maxSize: maxSize}
+	}
+}
+
+func cmdCleanDrillEntry(idx int, path string) tea.Cmd {
+	return func() tea.Msg {
+		err := os.RemoveAll(path)
+		return drillItemDoneMsg{idx: idx, err: err}
+	}
+}
+
 func cmdCleanEntry(idx int, loc macos.KnownLocation) tea.Cmd {
 	return func() tea.Msg {
 		var err error
-		// CommandOnly items must use CleanFn (Docker, iOS simulators).
-		// All other items use direct path removal — avoids exec PATH issues.
 		if loc.CommandOnly && loc.CleanFn != nil {
 			err = loc.CleanFn()
 		} else if loc.Path != "" {
