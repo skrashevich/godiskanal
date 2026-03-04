@@ -186,6 +186,152 @@ func DefaultLocations(home string) []KnownLocation {
 				return exec.Command("pip", "cache", "purge").Run()
 			},
 		},
+		// ── Developer tools ──────────────────────────────────────────────────
+		{
+			Name:        "Go build cache",
+			Path:        filepath.Join(home, "Library/Caches/go-build"),
+			Description: "Кэш сборки Go",
+			Cleanable:   true,
+			CleanNote:   "go clean -cache",
+			CleanFn: func() error {
+				return exec.Command("go", "clean", "-cache").Run()
+			},
+		},
+		{
+			Name:        "Rust toolchains",
+			Path:        filepath.Join(home, ".rustup/toolchains"),
+			Description: "Установленные версии Rust (rustup)",
+			Cleanable:   true,
+			CleanNote:   "rustup toolchain list; rustup toolchain remove <version>",
+		},
+		{
+			Name:        "CocoaPods cache",
+			Path:        filepath.Join(home, ".cocoapods"),
+			Description: "Кэш CocoaPods (iOS/macOS зависимости)",
+			Cleanable:   true,
+			CleanNote:   "pod cache clean --all",
+			CleanFn: func() error {
+				return exec.Command("pod", "cache", "clean", "--all").Run()
+			},
+		},
+		{
+			Name:        "Node-gyp cache",
+			Path:        filepath.Join(home, ".node-gyp"),
+			Description: "Кэш нативных Node.js модулей",
+			Cleanable:   true,
+			CleanNote:   "Безопасно удалить, пересоздаётся",
+		},
+		{
+			Name:        "Dart/Flutter pub",
+			Path:        filepath.Join(home, ".pub-cache"),
+			Description: "Кэш пакетов Dart/Flutter",
+			Cleanable:   true,
+			CleanNote:   "dart pub cache clean",
+			CleanFn: func() error {
+				return exec.Command("dart", "pub", "cache", "clean").Run()
+			},
+		},
+		{
+			Name:        "NuGet packages",
+			Path:        filepath.Join(home, ".nuget/packages"),
+			Description: "Кэш пакетов .NET / NuGet",
+			Cleanable:   true,
+			CleanNote:   "dotnet nuget locals all --clear",
+			CleanFn: func() error {
+				return exec.Command("dotnet", "nuget", "locals", "all", "--clear").Run()
+			},
+		},
+		{
+			Name:        "PlatformIO",
+			Path:        filepath.Join(home, ".platformio"),
+			Description: "Тулчейны и библиотеки PlatformIO (embedded dev)",
+			Cleanable:   true,
+			CleanNote:   "pio system prune",
+			CleanFn: func() error {
+				return exec.Command("pio", "system", "prune", "--force").Run()
+			},
+		},
+		{
+			Name:        "Bun packages",
+			Path:        filepath.Join(home, ".bun/install"),
+			Description: "Кэш и глобальные пакеты Bun",
+			Cleanable:   true,
+			CleanNote:   "bun pm cache rm",
+			CleanFn: func() error {
+				return exec.Command("bun", "pm", "cache", "rm").Run()
+			},
+		},
+		// ── AI / ML ──────────────────────────────────────────────────────────
+		{
+			Name:        "HuggingFace models",
+			Path:        filepath.Join(home, ".cache/huggingface"),
+			Description: "Локальные модели HuggingFace",
+			Cleanable:   true,
+			CleanNote:   "huggingface-cli delete-cache или удалите модели вручную",
+		},
+		{
+			Name:        "Whisper models",
+			Path:        filepath.Join(home, ".cache/whisper"),
+			Description: "Модели OpenAI Whisper (распознавание речи)",
+			Cleanable:   true,
+			CleanNote:   "Перескачаются при следующем запуске",
+		},
+		{
+			Name:        "uv cache",
+			Path:        filepath.Join(home, ".cache/uv"),
+			Description: "Кэш пакетного менеджера uv (Python)",
+			Cleanable:   true,
+			CleanNote:   "uv cache clean",
+			CleanFn: func() error {
+				return exec.Command("uv", "cache", "clean").Run()
+			},
+		},
+		{
+			Name:        "Continue AI index",
+			Path:        filepath.Join(home, ".continue/index"),
+			Description: "Поисковый индекс кода Continue AI",
+			Cleanable:   true,
+			CleanNote:   "Пересоздаётся автоматически при открытии VS Code",
+		},
+		// ── Editors / IDEs ───────────────────────────────────────────────────
+		{
+			Name:        "VS Code extensions",
+			Path:        filepath.Join(home, ".vscode/extensions"),
+			Description: "Расширения Visual Studio Code",
+			Cleanable:   false,
+			CleanNote:   "Удалите ненужные расширения в VS Code",
+		},
+		// ── Python ───────────────────────────────────────────────────────────
+		{
+			Name:        "Python venv (~/.venv)",
+			Path:        filepath.Join(home, ".venv"),
+			Description: "Виртуальное окружение Python",
+			Cleanable:   true,
+			CleanNote:   "Удалите если окружение не нужно, пересоздаётся через python -m venv",
+		},
+		// ── Browsers / Electron ──────────────────────────────────────────────
+		{
+			Name:        "Puppeteer Chromium",
+			Path:        filepath.Join(home, ".cache/puppeteer"),
+			Description: "Chromium для Puppeteer (браузерное тестирование)",
+			Cleanable:   true,
+			CleanNote:   "Перескачается при следующем использовании Puppeteer",
+		},
+		{
+			Name:        "Electron cache",
+			Path:        filepath.Join(home, ".cache/electron"),
+			Description: "Кэш Electron SDK",
+			Cleanable:   true,
+			CleanNote:   "Перескачается при сборке Electron-приложений",
+		},
+		// ── Wine ─────────────────────────────────────────────────────────────
+		{
+			Name:        "Wine",
+			Path:        filepath.Join(home, ".wine"),
+			Description: "Данные Wine (запуск Windows-приложений)",
+			Cleanable:   false,
+			CleanNote:   "Содержит данные Windows-приложений, удаляйте осторожно",
+		},
 	}
 
 	// Docker: check different possible paths

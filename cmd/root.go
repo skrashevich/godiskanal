@@ -13,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/skrashevich/godiskanal/llm"
 	"github.com/skrashevich/godiskanal/macos"
 	"github.com/skrashevich/godiskanal/scanner"
+	"github.com/skrashevich/godiskanal/tui"
 	"github.com/skrashevich/godiskanal/ui"
 )
 
@@ -28,6 +30,7 @@ var (
 	apiURL        string
 	model         string
 	interactive   bool
+	browse        bool
 	minSize       int64
 	oneFilesystem bool
 	excludePaths  []string
@@ -74,6 +77,7 @@ func init() {
 	rootCmd.Flags().BoolVarP(&oneFilesystem, "one-filesystem", "x", false, "Не пересекать границы файловых систем (пропускать точки монтирования)")
 	rootCmd.Flags().StringArrayVar(&excludePaths, "exclude", nil, "Исключить путь из сканирования (можно повторять: --exclude ~/a --exclude ~/b)")
 	rootCmd.Flags().Int64Var(&minSize, "min-size", 100*1024*1024, "Минимальный размер для отображения (байт)")
+	rootCmd.Flags().BoolVarP(&browse, "browse", "b", false, "Интерактивный браузер диска (TUI) с навигацией и удалением")
 	rootCmd.Flags().BoolVar(&useLLM, "llm", false, "Включить LLM-анализ с рекомендациями по очистке")
 	rootCmd.Flags().StringVar(&apiKey, "api-key", "", "API ключ (переопределяет OPENAI_API_KEY)")
 	rootCmd.Flags().StringVar(&apiURL, "api-url", "", "Базовый URL API (переопределяет OPENAI_BASE_URL; по умолчанию: https://api.openai.com/v1)")
@@ -133,12 +137,35 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build size map for lookups
-	sizeMap := make(map[string]int64, len(result.Entries))
+	sizeMap := make(map[string]int64, len(result.Entries)+1)
+	sizeMap[scanPath] = result.TotalSize
 	for _, e := range result.Entries {
 		sizeMap[e.Path] = e.Size
 	}
 
-	// 3. Top directories
+	// 3. TUI browser (if --browse)
+	if browse {
+		var llmClient *llm.Client
+		key := apiKey
+		if key == "" {
+			key = os.Getenv("OPENAI_API_KEY")
+		}
+		if key != "" {
+			baseURL := apiURL
+			if baseURL == "" {
+				baseURL = os.Getenv("OPENAI_BASE_URL")
+			}
+			llmClient = llm.NewClient(key, model, baseURL)
+		}
+		m := tui.New(scanPath, sizeMap, llmClient)
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			return fmt.Errorf("ошибка браузера: %w", err)
+		}
+		return nil
+	}
+
+	// 4. Top directories
 	top := result.TopN(topN)
 	var maxTopSize int64
 	if len(top) > 0 {

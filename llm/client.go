@@ -91,10 +91,66 @@ type streamOptions struct {
 }
 
 type chatRequest struct {
-	Model         string        `json:"model"`
-	Messages      []message     `json:"messages"`
-	Stream        bool          `json:"stream"`
-	StreamOptions streamOptions `json:"stream_options"`
+	Model         string         `json:"model"`
+	Messages      []message      `json:"messages"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"` // only for streaming
+}
+
+// Describe sends a single-turn completion request and returns the full response.
+// Used by the TUI browser to explain what a directory/file is.
+func (c *Client) Describe(userPrompt string) (string, error) {
+	req := chatRequest{
+		Model: c.Model,
+		Messages: []message{
+			{
+				Role: "system",
+				Content: `Ты эксперт по macOS. Кратко (2-4 предложения) объясни что это за путь
+(директория или файл) и безопасно ли его удалить для освобождения места.
+Отвечай на русском языке. Если путь явно системный или критически важный — предупреди об этом.`,
+			},
+			{Role: "user", Content: userPrompt},
+		},
+		Stream: false,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API error %d: %s", resp.StatusCode, string(b))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("пустой ответ от API")
+	}
+	return result.Choices[0].Message.Content, nil
 }
 
 // StreamAnalysis sends disk analysis data to the LLM and streams the response to out.
@@ -117,7 +173,7 @@ func (c *Client) StreamAnalysis(prompt string, out io.Writer) (*Usage, error) {
 			},
 		},
 		Stream:        true,
-		StreamOptions: streamOptions{IncludeUsage: true},
+		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
 
 	body, err := json.Marshal(req)
