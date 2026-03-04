@@ -337,6 +337,35 @@ func DefaultLocations(home string) []KnownLocation {
 			Cleanable:   false,
 			CleanNote:   "Содержит данные Windows-приложений, удаляйте осторожно",
 		},
+		// ── Browsers ─────────────────────────────────────────────────────────
+		{
+			Name:        "Safari cache",
+			Path:        filepath.Join(home, "Library/Caches/com.apple.Safari"),
+			Description: "Дисковый кэш Safari",
+			Cleanable:   true,
+			CleanNote:   "Кэш пересоздаётся автоматически при посещении сайтов",
+		},
+		{
+			Name:        "Chrome cache",
+			Path:        filepath.Join(home, "Library/Caches/com.google.Chrome"),
+			Description: "Дисковый кэш Google Chrome",
+			Cleanable:   true,
+			CleanNote:   "Кэш пересоздаётся автоматически",
+		},
+		{
+			Name:        "Telegram",
+			Path:        filepath.Join(home, "Library/Application Support/Telegram Desktop"),
+			Description: "Данные Telegram Desktop (включая медиакэш)",
+			Cleanable:   false,
+			CleanNote:   "Очистите медиакэш через Настройки → Конфиденциальность → Хранилище",
+		},
+		{
+			Name:        "Telegram (App Store)",
+			Path:        filepath.Join(home, "Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram"),
+			Description: "Данные Telegram из Mac App Store",
+			Cleanable:   false,
+			CleanNote:   "Очистите медиакэш через Настройки → Конфиденциальность → Хранилище",
+		},
 	}
 
 	// Docker: check different possible paths
