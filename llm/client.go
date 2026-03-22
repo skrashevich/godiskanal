@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/skrashevich/godiskanal/i18n"
 )
 
 const defaultBaseURL = "https://api.openai.com/v1"
@@ -104,10 +106,8 @@ func (c *Client) Describe(userPrompt string) (string, error) {
 		Model: c.Model,
 		Messages: []message{
 			{
-				Role: "system",
-				Content: `Ты эксперт по macOS. Кратко (2-4 предложения) объясни что это за путь
-(директория или файл) и безопасно ли его удалить для освобождения места.
-Отвечай на русском языке. Если путь явно системный или критически важный — предупреди об этом.`,
+				Role:    "system",
+				Content: i18n.T("llm.system.describe"),
 			},
 			{Role: "user", Content: userPrompt},
 		},
@@ -148,7 +148,7 @@ func (c *Client) Describe(userPrompt string) (string, error) {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("пустой ответ от API")
+		return "", fmt.Errorf("%s", i18n.T("llm.empty_response"))
 	}
 	return result.Choices[0].Message.Content, nil
 }
@@ -160,12 +160,8 @@ func (c *Client) StreamAnalysis(prompt string, out io.Writer) (*Usage, error) {
 		Model: c.Model,
 		Messages: []message{
 			{
-				Role: "system",
-				Content: `Ты эксперт по macOS, помогающий пользователям освободить место на диске.
-Анализируй данные об использовании диска и давай конкретные, actionable рекомендации.
-Приоритизируй рекомендации по потенциальному объёму освобождаемого места.
-Используй markdown: заголовки, жирный текст, списки. Отвечай на русском языке.
-Будь конкретен: указывай точные команды и пути для очистки.`,
+				Role:    "system",
+				Content: i18n.T("llm.system.analyze"),
 			},
 			{
 				Role:    "user",

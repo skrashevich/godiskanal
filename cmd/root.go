@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/skrashevich/godiskanal/i18n"
 	"github.com/skrashevich/godiskanal/llm"
 	"github.com/skrashevich/godiskanal/macos"
 	"github.com/skrashevich/godiskanal/scanner"
@@ -34,64 +35,34 @@ var (
 	excludePaths  []string
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "godiskanal [--path PATH]",
-	Short: "Анализатор использования диска для macOS",
-	Long: `godiskanal — консольная утилита для анализа использования диска на macOS.
-
-Параллельно сканирует файловую систему, показывает топ директорий по размеру,
-проверяет известные «пожиратели» места (Xcode, Docker, кэши пакетных менеджеров,
-iCloud и др.) и помогает освободить пространство.
-
-При наличии API ключа (--llm) отправляет данные в OpenAI-совместимый LLM
-и стримит персонализированные рекомендации прямо в терминал.
-
-Сканирование:
-  • Многопоточное — по умолчанию использует все CPU ядра
-  • Прогресс показывает текущий каталог, адаптируется под ширину терминала
-  • Директории, не ответившие за 3 секунды (iCloud, NFS), пропускаются
-  • Ctrl+C прерывает сканирование и выводит частичные результаты
-
-Браузер диска (--browse / -b):
-  • ncdu-подобный TUI с навигацией по дереву директорий
-  • Отображает размеры файлов и папок с визуальными барами
-  • Пробел — отметить для удаления, d — удалить отмеченное
-  • i — получить объяснение от LLM (если передан API ключ)
-
-Интерактивная очистка (-i):
-  • TUI-интерфейс с выбором очищаемых директорий через пробел
-  • Показывает размеры и прогресс-бары, сортирует по объёму
-  • Запрашивает подтверждение перед удалением
-  • Docker и iOS Simulators требуют ручного запуска команды
-
-Переменные окружения:
-  OPENAI_API_KEY   API ключ (если не указан --api-key)
-  OPENAI_BASE_URL  Базовый URL API (если не указан --api-url)`,
-	RunE:          run,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-}
-
 func Execute() {
+	home, _ := os.UserHomeDir()
+
+	rootCmd := &cobra.Command{
+		Use:           "godiskanal [--path PATH]",
+		Short:         i18n.T("cmd.short"),
+		Long:          i18n.T("cmd.long"),
+		RunE:          run,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+
+	rootCmd.Flags().StringVarP(&scanPath, "path", "p", home, i18n.T("flag.path"))
+	rootCmd.Flags().IntVarP(&topN, "top", "n", 20, i18n.T("flag.top"))
+	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, i18n.T("flag.interactive"))
+	rootCmd.Flags().BoolVarP(&oneFilesystem, "one-filesystem", "x", false, i18n.T("flag.one_filesystem"))
+	rootCmd.Flags().StringArrayVar(&excludePaths, "exclude", nil, i18n.T("flag.exclude"))
+	rootCmd.Flags().Int64Var(&minSize, "min-size", 100*1024*1024, i18n.T("flag.min_size"))
+	rootCmd.Flags().BoolVarP(&browse, "browse", "b", false, i18n.T("flag.browse"))
+	rootCmd.Flags().BoolVar(&useLLM, "llm", false, i18n.T("flag.llm"))
+	rootCmd.Flags().StringVar(&apiKey, "api-key", "", i18n.T("flag.api_key"))
+	rootCmd.Flags().StringVar(&apiURL, "api-url", "", i18n.T("flag.api_url"))
+	rootCmd.Flags().StringVar(&model, "model", "gpt-4o-mini", i18n.T("flag.model"))
+
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Ошибка: %v\n", err)
+		fmt.Fprint(os.Stderr, i18n.Tf("err.generic", err))
 		os.Exit(1)
 	}
-}
-
-func init() {
-	home, _ := os.UserHomeDir()
-	rootCmd.Flags().StringVarP(&scanPath, "path", "p", home, "Путь для сканирования")
-	rootCmd.Flags().IntVarP(&topN, "top", "n", 20, "Количество топ-директорий")
-	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Интерактивный режим очистки")
-	rootCmd.Flags().BoolVarP(&oneFilesystem, "one-filesystem", "x", false, "Не пересекать границы файловых систем (пропускать точки монтирования)")
-	rootCmd.Flags().StringArrayVar(&excludePaths, "exclude", nil, "Исключить путь из сканирования (можно повторять: --exclude ~/a --exclude ~/b)")
-	rootCmd.Flags().Int64Var(&minSize, "min-size", 100*1024*1024, "Минимальный размер для отображения (байт)")
-	rootCmd.Flags().BoolVarP(&browse, "browse", "b", false, "Интерактивный браузер диска (TUI) с навигацией и удалением")
-	rootCmd.Flags().BoolVar(&useLLM, "llm", false, "Включить LLM-анализ с рекомендациями по очистке")
-	rootCmd.Flags().StringVar(&apiKey, "api-key", "", "API ключ (переопределяет OPENAI_API_KEY)")
-	rootCmd.Flags().StringVar(&apiURL, "api-url", "", "Базовый URL API (переопределяет OPENAI_BASE_URL; по умолчанию: https://api.openai.com/v1)")
-	rootCmd.Flags().StringVar(&model, "model", "gpt-4o-mini", "Модель LLM")
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -101,20 +72,20 @@ func run(cmd *cobra.Command, args []string) error {
 	home, _ := os.UserHomeDir()
 	scanPath = expandHome(scanPath, home)
 
-	fmt.Printf("\033[1mgodiskanal\033[0m — анализатор диска macOS\n")
+	fmt.Printf("\033[1m%s\033[0m\n", i18n.T("app.title"))
 
 	// 1. Disk info
 	diskInfo, err := macos.GetDiskInfo(scanPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "  Предупреждение: не удалось получить информацию о диске: %v\n", err)
+		fmt.Fprint(os.Stderr, i18n.Tf("err.disk_info", err))
 	} else {
 		ui.PrintDiskUsage(diskInfo.Total, diskInfo.Used, diskInfo.Free)
 	}
 
 	// 2. Scan
-	ui.Header("СКАНИРОВАНИЕ")
+	ui.Header(i18n.T("scan.header"))
 	if oneFilesystem {
-		fmt.Printf("  \033[2m-x: пропускать точки монтирования\033[0m\n")
+		fmt.Println(i18n.T("scan.one_fs"))
 	}
 	start := time.Now()
 	spinFrame := 0
@@ -129,21 +100,21 @@ func run(cmd *cobra.Command, args []string) error {
 		spinFrame++
 	})
 	if err != nil {
-		return fmt.Errorf("ошибка сканирования: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("err.scan"), err)
 	}
 
 	if ctx.Err() != nil {
-		fmt.Printf("\n  \033[33m⚠ Сканирование прервано (Ctrl+C) — результаты неполные\033[0m\n")
+		fmt.Println(i18n.T("scan.interrupted"))
 	}
 
 	elapsed := time.Since(start).Seconds()
 	ui.PrintScanDone(result.FileCount, result.TotalSize, elapsed)
 
 	if result.Errors > 0 {
-		fmt.Printf("  \033[33m⚠ Пропущено %d директорий (нет доступа)\033[0m\n", result.Errors)
+		fmt.Println(i18n.Tf("scan.perm_errors", result.Errors))
 	}
 	if result.Timeouts > 0 {
-		fmt.Printf("  \033[33m⚠ Пропущено %d директорий (таймаут — возможно iCloud или сетевой диск)\033[0m\n", result.Timeouts)
+		fmt.Println(i18n.Tf("scan.timeouts", result.Timeouts))
 	}
 
 	// Build size map for lookups
@@ -170,7 +141,7 @@ func run(cmd *cobra.Command, args []string) error {
 		m := tui.New(scanPath, sizeMap, llmClient)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
-			return fmt.Errorf("ошибка браузера: %w", err)
+			return fmt.Errorf("%s: %w", i18n.T("err.browser"), err)
 		}
 		return nil
 	}
@@ -181,7 +152,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if len(top) > 0 {
 		maxTopSize = top[0].Size
 	}
-	ui.Header(fmt.Sprintf("ТОП-%d ДИРЕКТОРИЙ", len(top)))
+	ui.Header(i18n.Tf("top.header", len(top)))
 	for i, e := range top {
 		ui.PrintTopEntry(i+1, displayPath(e.Path, home), e.Size, maxTopSize)
 	}
@@ -192,7 +163,7 @@ func run(cmd *cobra.Command, args []string) error {
 		sort.Slice(nmDirs, func(i, j int) bool {
 			return nmDirs[i].Size > nmDirs[j].Size
 		})
-		ui.Header(fmt.Sprintf("NODE_MODULES (%d найдено)", len(nmDirs)))
+		ui.Header(i18n.Tf("node_modules.header", len(nmDirs)))
 		maxNM := nmDirs[0].Size
 		for i, nm := range nmDirs {
 			if i >= 10 {
@@ -205,7 +176,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// 5. Known macOS locations
 	locs := macos.DefaultLocations(home)
 	macos.PopulateSizes(locs, sizeMap, scanPath)
-	ui.Header("ИЗВЕСТНЫЕ МЕСТА")
+	ui.Header(i18n.T("known.header"))
 	for _, loc := range locs {
 		if !loc.Exists {
 			continue
@@ -215,8 +186,8 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Time Machine snapshots
 	if count, err := macos.TimeMachineSnapshotCount(); err == nil && count > 0 {
-		fmt.Printf("\n  \033[36mℹ Time Machine: %d локальных снимков\033[0m\n", count)
-		fmt.Printf("    Удалить: \033[1mtmutil deletelocalsnapshots /\033[0m\n")
+		fmt.Println(i18n.Tf("tm.info", count))
+		fmt.Println(i18n.T("tm.delete"))
 	}
 
 	// 6. LLM analysis
@@ -226,7 +197,7 @@ func run(cmd *cobra.Command, args []string) error {
 			key = os.Getenv("OPENAI_API_KEY")
 		}
 		if key == "" {
-			return fmt.Errorf("требуется OpenAI API ключ: --api-key или переменная окружения OPENAI_API_KEY")
+			return fmt.Errorf("%s", i18n.T("err.api_key"))
 		}
 
 		baseURL := apiURL
@@ -234,14 +205,14 @@ func run(cmd *cobra.Command, args []string) error {
 			baseURL = os.Getenv("OPENAI_BASE_URL")
 		}
 
-		ui.Header("АНАЛИЗ LLM")
-		fmt.Printf("  \033[2mАнализирую с помощью %s...\033[0m\n\n", model)
+		ui.Header(i18n.T("llm.header"))
+		fmt.Println(i18n.Tf("llm.analyzing", model) + "\n")
 
 		prompt := buildLLMPrompt(diskInfo, top, locs, home)
 		client := llm.NewClient(key, model, baseURL)
 		usage, err := client.StreamAnalysis(prompt, os.Stdout)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n  \033[31mОшибка LLM: %v\033[0m\n", err)
+			fmt.Fprintln(os.Stderr, i18n.Tf("llm.error", err))
 		}
 		if usage != nil {
 			printLLMCost(usage, model)
@@ -252,11 +223,11 @@ func run(cmd *cobra.Command, args []string) error {
 	if interactive {
 		m := tui.NewCleanup(locs, sizeMap)
 		if !m.HasItems() {
-			fmt.Println("\n  Нет подходящих для очистки директорий.")
+			fmt.Println(i18n.T("cleanup.no_items"))
 		} else {
 			p := tea.NewProgram(m, tea.WithAltScreen())
 			if _, err := p.Run(); err != nil {
-				return fmt.Errorf("ошибка TUI очистки: %w", err)
+				return fmt.Errorf("%s: %w", i18n.T("err.cleanup_tui"), err)
 			}
 		}
 	} else if !useLLM {
@@ -270,10 +241,10 @@ func run(cmd *cobra.Command, args []string) error {
 func buildLLMPrompt(disk *macos.DiskInfo, top []scanner.Entry, locs []macos.KnownLocation, home string) string {
 	var b strings.Builder
 
-	b.WriteString("## Анализ диска macOS\n\n")
+	b.WriteString(i18n.T("llm.prompt.header"))
 
 	if disk != nil {
-		b.WriteString(fmt.Sprintf("**Диск:** %s всего, %s использовано (%.0f%%), %s свободно\n\n",
+		b.WriteString(i18n.Tf("llm.prompt.disk",
 			ui.FormatSize(disk.Total),
 			ui.FormatSize(disk.Used),
 			float64(disk.Used)/float64(disk.Total)*100,
@@ -281,7 +252,7 @@ func buildLLMPrompt(disk *macos.DiskInfo, top []scanner.Entry, locs []macos.Know
 		))
 	}
 
-	b.WriteString("### Топ директорий по размеру:\n")
+	b.WriteString(i18n.T("llm.prompt.top_dirs"))
 	for i, e := range top {
 		if i >= 15 {
 			break
@@ -289,21 +260,20 @@ func buildLLMPrompt(disk *macos.DiskInfo, top []scanner.Entry, locs []macos.Know
 		b.WriteString(fmt.Sprintf("%d. %s — %s\n", i+1, displayPath(e.Path, home), ui.FormatSize(e.Size)))
 	}
 
-	b.WriteString("\n### Известные macOS локации:\n")
+	b.WriteString(i18n.T("llm.prompt.known"))
 	for _, loc := range locs {
 		if !loc.Exists || loc.Size <= 0 {
 			continue
 		}
 		cleanable := ""
 		if loc.Cleanable {
-			cleanable = " [можно очистить]"
+			cleanable = i18n.T("llm.prompt.cleanable")
 		}
-		b.WriteString(fmt.Sprintf("- **%s**: %s%s\n  Путь: %s\n",
-			loc.Name, ui.FormatSize(loc.Size), cleanable, displayPath(loc.Path, home)))
+		b.WriteString(fmt.Sprintf("- **%s**: %s%s\n", loc.Name, ui.FormatSize(loc.Size), cleanable))
+		b.WriteString(i18n.Tf("llm.prompt.path", displayPath(loc.Path, home)))
 	}
 
-	b.WriteString("\nДай конкретные рекомендации по освобождению места, отсортированные по эффекту. ")
-	b.WriteString("Для каждого пункта укажи ожидаемый объём освобождаемого места и точную команду или действие.")
+	b.WriteString(i18n.T("llm.prompt.request"))
 
 	return b.String()
 }
@@ -324,16 +294,15 @@ func printQuickTips(locs []macos.KnownLocation) {
 		return tips[i].Size > tips[j].Size
 	})
 
-	ui.Header("РЕКОМЕНДАЦИИ")
+	ui.Header(i18n.T("tips.header"))
 	total := int64(0)
 	for _, loc := range tips {
 		fmt.Printf("  • %-26s  %s  —  %s\n",
 			loc.Name, ui.FormatSize(loc.Size), loc.CleanNote)
 		total += loc.Size
 	}
-	fmt.Printf("\n  Потенциально освободить: \033[1m%s\033[0m\n", ui.FormatSize(total))
-	fmt.Printf("\n  Запустите с \033[1m-i\033[0m для интерактивной очистки")
-	fmt.Printf(" или \033[1m--llm\033[0m для анализа с помощью ИИ.\n")
+	fmt.Print(i18n.Tf("tips.potential", ui.FormatSize(total)))
+	fmt.Print(i18n.T("tips.run"))
 }
 
 // displayPath shortens a path by replacing the home directory with ~.
@@ -349,14 +318,14 @@ func displayPath(path, home string) string {
 
 // printLLMCost prints token usage and estimated cost after an LLM call.
 func printLLMCost(usage *llm.Usage, model string) {
-	fmt.Printf("\n  \033[2m— Токены: %d вход + %d выход = %d итого\033[0m",
-		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+	fmt.Print(i18n.Tf("llm.tokens",
+		usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens))
 
 	if cost, ok := usage.Cost(model); ok {
 		if cost < 0.001 {
-			fmt.Printf("  \033[2m| стоимость: <$0.001\033[0m")
+			fmt.Print(i18n.T("llm.cost_low"))
 		} else {
-			fmt.Printf("  \033[2m| стоимость: $%.4f\033[0m", cost)
+			fmt.Print(i18n.Tf("llm.cost", cost))
 		}
 	}
 	fmt.Println()
@@ -384,4 +353,3 @@ func expandHome(path, home string) string {
 	}
 	return filepath.Clean(path)
 }
-

@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/skrashevich/godiskanal/i18n"
 )
 
 // ANSI escape codes
@@ -76,8 +78,8 @@ func Header(title string) {
 
 // PrintDiskUsage shows disk total/used/free.
 func PrintDiskUsage(total, used, free int64) {
-	Header("ДИСК")
-	fmt.Printf("  Всего:        %s%s%s\n", bold, FormatSize(total), reset)
+	Header(i18n.T("disk.header"))
+	fmt.Printf("  %-14s %s%s%s\n", i18n.T("disk.total"), bold, FormatSize(total), reset)
 
 	usedPct := 0.0
 	if total > 0 {
@@ -90,9 +92,9 @@ func PrintDiskUsage(total, used, free int64) {
 		color = yellow
 	}
 	barStr := sizeBar(used, total, 28)
-	fmt.Printf("  Использовано: %s%s  %s  %.0f%%%s\n",
-		color, FormatSize(used), barStr, usedPct, reset)
-	fmt.Printf("  Свободно:     %s%s%s\n", green, FormatSize(free), reset)
+	fmt.Printf("  %-14s %s%s  %s  %.0f%%%s\n",
+		i18n.T("disk.used"), color, FormatSize(used), barStr, usedPct, reset)
+	fmt.Printf("  %-14s %s%s%s\n", i18n.T("disk.free"), green, FormatSize(free), reset)
 }
 
 // PrintTopEntry prints a single entry in the top directories list.
@@ -140,7 +142,7 @@ func SpinnerFrame(n int) string {
 // PrintScanProgress prints the scanning progress line (overwrites previous).
 // The current directory is truncated to fit the terminal width dynamically.
 func PrintScanProgress(frame int, files, bytes int64, currentDir string) {
-	prefix := fmt.Sprintf("  %s %s файлов | %s  ",
+	prefix := i18n.Tf("scan.progress",
 		SpinnerFrame(frame),
 		FormatComma(files),
 		FormatSize(bytes),
@@ -179,12 +181,11 @@ func termWidth() int {
 
 // PrintScanDone prints the final scan result line.
 func PrintScanDone(files, bytes int64, elapsed float64) {
-	fmt.Printf("\r  ✓ Просканировано %s файлов | %s | %.1f с%s\n",
+	fmt.Print(i18n.Tf("scan.done",
 		FormatComma(files),
 		FormatSize(bytes),
 		elapsed,
-		strings.Repeat(" ", 10),
-	)
+	) + strings.Repeat(" ", 10) + "\n")
 }
 
 // FormatComma formats a number with comma separators.

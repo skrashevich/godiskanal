@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/skrashevich/godiskanal/i18n"
 	"github.com/skrashevich/godiskanal/macos"
 	"github.com/skrashevich/godiskanal/ui"
 )
@@ -461,7 +462,7 @@ func (m CleanupModel) View() string {
 			hdr := m.renderDrillHeader()
 			sep := styleSep.Render(strings.Repeat("─", m.width))
 			spin := spinFrames[m.spinnerFrame%len(spinFrames)]
-			return hdr + "\n" + spin + " Загрузка содержимого...\n" + sep
+			return hdr + "\n" + spin + i18n.T("cleanup.loading") + "\n" + sep
 		}
 		return m.renderDrillHeader() + "\n" + m.renderDrillList() + m.renderDrillFooter()
 
@@ -494,7 +495,7 @@ func (m CleanupModel) View() string {
 // ── main list header ──────────────────────────────────────────────────────────
 
 func (m CleanupModel) renderHeader() string {
-	title := styleHeader.Render("godiskanal — Интерактивная очистка")
+	title := styleHeader.Render(i18n.T("cleanup.header"))
 
 	var selCount int
 	var selSize int64
@@ -581,9 +582,7 @@ func (m CleanupModel) renderEntry(i int) string {
 
 func (m CleanupModel) renderFooter() string {
 	sep := styleSep.Render(strings.Repeat("─", m.width))
-	hints := styleDim.Render(
-		"↑↓/jk нав.  Space выбрать  a все/сброс  Enter детали  c очистить  q выйти",
-	)
+	hints := styleDim.Render(i18n.T("cleanup.footer"))
 	return sep + "\n" + hints
 }
 
@@ -602,12 +601,11 @@ func (m CleanupModel) renderConfirm() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n  Очистить %d элемент(ов) (%s)?\n\n",
-		len(lines), ui.FormatSize(total)))
+	b.WriteString(i18n.Tf("cleanup.confirm", len(lines), ui.FormatSize(total)))
 	for _, l := range lines {
 		b.WriteString(l + "\n")
 	}
-	b.WriteString("\n  [y] Да, очистить  [любая другая клавиша] Отмена\n")
+	b.WriteString(i18n.T("cleanup.confirm_yes"))
 	return b.String()
 }
 
@@ -651,18 +649,18 @@ func (m CleanupModel) renderDone() string {
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("\n  Освобождено: %s", ui.FormatSize(freed)))
+	b.WriteString(i18n.Tf("cleanup.freed", ui.FormatSize(freed)))
 	if errs > 0 {
-		b.WriteString(fmt.Sprintf("  (%d ошибок)", errs))
+		b.WriteString(i18n.Tf("cleanup.errors", errs))
 	}
 	if len(m.commandOnly) > 0 {
-		b.WriteString("\n\n  Требуют ручной очистки (запустите команду):\n")
+		b.WriteString(i18n.T("cleanup.manual"))
 		for _, loc := range m.commandOnly {
 			b.WriteString(fmt.Sprintf("    • %-20s  %s\n",
 				loc.Name, styleDim.Render(loc.CleanNote)))
 		}
 	}
-	b.WriteString("\n  Нажмите любую клавишу для выхода\n")
+	b.WriteString(i18n.T("cleanup.exit"))
 	return b.String()
 }
 
@@ -747,9 +745,7 @@ func (m CleanupModel) renderDrillEntryRow(i int) string {
 
 func (m CleanupModel) renderDrillFooter() string {
 	sep := styleSep.Render(strings.Repeat("─", m.width))
-	hints := styleDim.Render(
-		"↑↓/jk нав.  Space выбрать  a все/сброс  Enter/c удалить  Esc назад",
-	)
+	hints := styleDim.Render(i18n.T("cleanup.drill.footer"))
 	return sep + "\n" + hints
 }
 
@@ -773,12 +769,11 @@ func (m CleanupModel) renderDrillConfirm() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n  Удалить %d элемент(ов) (%s)?\n\n",
-		len(lines), ui.FormatSize(total)))
+	b.WriteString(i18n.Tf("cleanup.drill.confirm", len(lines), ui.FormatSize(total)))
 	for _, l := range lines {
 		b.WriteString(l + "\n")
 	}
-	b.WriteString("\n  [y] Да, удалить  [любая другая клавиша] Отмена\n")
+	b.WriteString(i18n.T("cleanup.drill.confirm_yes"))
 	return b.String()
 }
 
@@ -822,11 +817,11 @@ func (m CleanupModel) renderDrillDone() string {
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("\n  Освобождено: ~%s", ui.FormatSize(freed)))
+	b.WriteString(i18n.Tf("cleanup.drill.freed", ui.FormatSize(freed)))
 	if errs > 0 {
-		b.WriteString(fmt.Sprintf("  (%d ошибок)", errs))
+		b.WriteString(i18n.Tf("cleanup.errors", errs))
 	}
-	b.WriteString("\n\n  Нажмите любую клавишу для возврата к списку\n")
+	b.WriteString(i18n.T("cleanup.drill.back"))
 	return b.String()
 }
 
@@ -835,14 +830,14 @@ func (m CleanupModel) renderDrillDone() string {
 func (m CleanupModel) runningItemStatus(cleaning, cleaned bool, err error) (icon, status string) {
 	switch {
 	case err != nil:
-		return "✗", styleDim.Render("ошибка: "+err.Error())
+		return "✗", styleDim.Render(i18n.T("cleanup.status.error") + err.Error())
 	case cleaned:
-		return "✓", styleDim.Render("готово")
+		return "✓", styleDim.Render(i18n.T("cleanup.status.done"))
 	case cleaning:
 		spin := spinFrames[m.spinnerFrame%len(spinFrames)]
-		return spin, styleDim.Render("очищаю...")
+		return spin, styleDim.Render(i18n.T("cleanup.status.cleaning"))
 	default:
-		return "○", styleDim.Render("ожидание")
+		return "○", styleDim.Render(i18n.T("cleanup.status.waiting"))
 	}
 }
 

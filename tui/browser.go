@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/skrashevich/godiskanal/i18n"
 	"github.com/skrashevich/godiskanal/llm"
 	"github.com/skrashevich/godiskanal/ui"
 )
@@ -203,7 +204,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case loadedMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.status = fmt.Sprintf("Ошибка: %v", msg.err)
+			m.status = i18n.Tf("browser.error", msg.err)
 			return m, nil
 		}
 		m.entries = msg.entries
@@ -224,9 +225,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deletedMsg:
 		m.mode = modeNormal
 		if msg.err != nil {
-			m.status = fmt.Sprintf("Ошибка удаления: %v", msg.err)
+			m.status = i18n.Tf("browser.delete_error", msg.err)
 		} else {
-			m.status = fmt.Sprintf("✓ Удалено %d, освобождено %s",
+			m.status = i18n.Tf("browser.delete_done",
 				len(msg.paths), ui.FormatSize(msg.freed))
 			m.marked = make(map[string]int64)
 			for _, p := range msg.paths {
@@ -253,7 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.llmPanelLoading = false
 		m.llmPanelIsAnalysis = true
 		if msg.err != nil {
-			m.llmPanelText = fmt.Sprintf("Ошибка: %v", msg.err)
+			m.llmPanelText = i18n.Tf("browser.error", msg.err)
 		} else {
 			m.llmPanelText = msg.text
 		}
@@ -286,7 +287,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmdDelete(paths, sizes)
 		default:
 			m.mode = modeNormal
-			m.status = "Удаление отменено"
+			m.status = i18n.T("browser.delete_cancel")
 		}
 		return m, nil
 	}
@@ -466,7 +467,7 @@ func (m Model) View() string {
 
 	var content string
 	if m.loading {
-		content = "\n  Загрузка...\n"
+		content = i18n.T("browser.loading")
 	} else if m.hasSidePanel() {
 		sideW := m.sidePanelWidth()
 		lw := m.listW()
@@ -611,15 +612,14 @@ func (m Model) renderPanelLines(panelW, maxH int) []string {
 
 	// ── label ──
 	if m.llmPanelIsAnalysis {
-		lines = append(lines, styleLLM.Render("  ● Анализ содержимого"))
+		lines = append(lines, styleLLM.Render(i18n.T("browser.panel.analysis")))
 	} else {
-		lines = append(lines, styleDim.Render("  ○ Описание"))
+		lines = append(lines, styleDim.Render(i18n.T("browser.panel.description")))
 	}
 
 	// ── content ──
 	if m.llmPanelLoading {
-		spin := "⟳"
-		lines = append(lines, styleLLM.Render("  "+spin+" Думаю..."))
+		lines = append(lines, styleLLM.Render(i18n.T("browser.panel.thinking")))
 	} else if m.llmPanelText != "" {
 		wrapped := strings.Split(wrapText(m.llmPanelText, panelW-3, "  "), "\n")
 		lines = append(lines, wrapped...)
@@ -634,7 +634,7 @@ func (m Model) renderPanelLines(panelW, maxH int) []string {
 			lines = append(lines, "")
 		}
 		if len(lines) < maxH {
-			lines = append(lines, styleDim.Render("  i: анализ содержимого"))
+			lines = append(lines, styleDim.Render(i18n.T("browser.panel.hint")))
 		}
 	}
 
@@ -653,15 +653,13 @@ func (m Model) renderFooter() string {
 
 	var hints string
 	if m.hasSidePanel() {
-		hints = styleDim.Render(
-			"↑↓/jk нав.  Enter/→ войти  ←/Esc назад  Space отметить  d удалить  i анализ  q выйти  ? помощь",
-		)
+		hints = styleDim.Render(i18n.T("browser.footer.full"))
 	} else {
-		parts := "↑↓/jk нав.  Enter/→ войти  ←/Esc назад  Space отметить  d удалить"
+		parts := i18n.T("browser.footer.base")
 		if m.llmClient != nil {
-			parts += "  i описание"
+			parts += i18n.T("browser.footer.desc")
 		}
-		parts += "  q выйти  ? помощь"
+		parts += i18n.T("browser.footer.quit")
 		hints = styleDim.Render(parts)
 	}
 
@@ -685,12 +683,11 @@ func (m Model) renderDeleting() string {
 	sort.Strings(paths)
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n  ⟳ Удаление %d элемент(ов) (%s)...\n\n",
-		len(m.marked), ui.FormatSize(total)))
+	b.WriteString(i18n.Tf("browser.deleting", len(m.marked), ui.FormatSize(total)))
 	for _, p := range paths {
 		b.WriteString(fmt.Sprintf("    %s\n", p))
 	}
-	b.WriteString("\n  Пожалуйста, подождите...\n")
+	b.WriteString(i18n.T("browser.please_wait"))
 	return b.String()
 }
 
@@ -704,38 +701,20 @@ func (m Model) renderConfirm() string {
 	sort.Strings(paths)
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n  Удалить %d элемент(ов) (%s)?\n\n",
-		len(m.marked), ui.FormatSize(total)))
+	b.WriteString(i18n.Tf("browser.confirm", len(m.marked), ui.FormatSize(total)))
 	for _, p := range paths {
 		b.WriteString(fmt.Sprintf("    %s  (%s)\n", p, ui.FormatSize(m.marked[p])))
 	}
-	b.WriteString("\n  [y] Да, удалить  [любая другая] Отмена\n")
+	b.WriteString(i18n.T("browser.confirm_yes"))
 	return b.String()
 }
 
 func (m Model) renderHelp() string {
 	llmSection := ""
 	if m.llmClient != nil {
-		llmSection = `  i               Детальный анализ содержимого
-  I               Вернуться к автодескрипции
-`
+		llmSection = i18n.T("browser.help.llm")
 	}
-	return `
-  Управление браузером диска
-  ────────────────────────────────────────
-  ↑ / k          Вверх
-  ↓ / j          Вниз
-  Enter / → / l  Открыть директорию
-  Esc / ← / h    Назад
-  PgUp / PgDn    Листать страницами
-  g / Home       В начало
-  G / End        В конец
-  Space           Отметить для удаления
-  d               Удалить отмеченные (или текущий)
-  D               Удалить текущий элемент
-` + llmSection + `  q               Выйти
-
-  Нажмите любую клавишу для возврата`
+	return i18n.T("browser.help") + llmSection + i18n.T("browser.help.quit") + i18n.T("browser.help.return")
 }
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
@@ -831,12 +810,11 @@ func cmdDelete(paths []string, sizes map[string]int64) tea.Cmd {
 func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(450 * time.Millisecond) // debounce: ignore stale requests
-		kind := "файл"
+		kind := i18n.T("browser.llm.file")
 		if entry.IsDir {
-			kind = "директория"
+			kind = i18n.T("browser.llm.dir")
 		}
-		prompt := fmt.Sprintf(
-			"Путь: %s\nТип: %s\nРазмер: %s\n\nКратко объясни что это и безопасно ли удалить.",
+		prompt := i18n.Tf("browser.llm.auto",
 			entry.Path, kind, ui.FormatSize(entry.Size),
 		)
 		text, err := client.Describe(prompt)
@@ -848,11 +826,11 @@ func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int) tea.Cmd {
 func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCache map[string]int64) tea.Cmd {
 	return func() tea.Msg {
 		var sb strings.Builder
-		kind := "файл"
+		kind := i18n.T("browser.llm.file")
 		if isDir {
-			kind = "директория"
+			kind = i18n.T("browser.llm.dir")
 		}
-		sb.WriteString(fmt.Sprintf("Анализ: %s\nТип: %s\nРазмер: %s\n",
+		sb.WriteString(i18n.Tf("browser.llm.analyze",
 			path, kind, ui.FormatSize(size)))
 
 		if isDir {
@@ -880,7 +858,7 @@ func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCac
 				sort.Slice(items, func(i, j int) bool {
 					return items[i].size > items[j].size
 				})
-				sb.WriteString("\nСодержимое (топ 15 по размеру):\n")
+				sb.WriteString(i18n.T("browser.llm.contents"))
 				for i, it := range items {
 					if i >= 15 {
 						break
@@ -895,11 +873,7 @@ func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCac
 			}
 		}
 
-		sb.WriteString("\nОтветь на русском:\n")
-		sb.WriteString("1. Что это и зачем нужно?\n")
-		sb.WriteString("2. Что можно безопасно удалить и сколько места освободится?\n")
-		sb.WriteString("3. Какой риск при удалении?\n")
-		sb.WriteString("4. Конкретные команды или пути для очистки.")
+		sb.WriteString(i18n.T("browser.llm.questions"))
 
 		text, err := client.Describe(sb.String())
 		return analysisMsg{text: text, err: err}

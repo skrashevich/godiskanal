@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/skrashevich/godiskanal/i18n"
 )
 
 // DiskInfo holds filesystem statistics.
@@ -52,31 +54,31 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "App Caches",
 			Path:        filepath.Join(home, "Library/Caches"),
-			Description: "Кэши приложений",
+			Description: i18n.T("loc.App Caches.desc"),
 			Cleanable:   true,
-			CleanNote:   "Кэши пересоздадутся автоматически",
+			CleanNote:   i18n.T("loc.App Caches.note"),
 		},
 		{
 			Name:        "App Support",
 			Path:        filepath.Join(home, "Library/Application Support"),
-			Description: "Данные приложений",
+			Description: i18n.T("loc.App Support.desc"),
 			Cleanable:   false,
-			CleanNote:   "Удалять данные конкретных приложений вручную",
+			CleanNote:   i18n.T("loc.App Support.note"),
 		},
 		{
 			Name:        "Xcode DerivedData",
 			Path:        filepath.Join(home, "Library/Developer/Xcode/DerivedData"),
-			Description: "Артефакты сборки Xcode",
+			Description: i18n.T("loc.Xcode DerivedData.desc"),
 			Cleanable:   true,
-			CleanNote:   "Xcode пересоберёт при необходимости",
+			CleanNote:   i18n.T("loc.Xcode DerivedData.note"),
 		},
 		{
 			Name:        "iOS Simulators",
 			Path:        filepath.Join(home, "Library/Developer/CoreSimulator/Devices"),
-			Description: "Образы iOS-симуляторов",
+			Description: i18n.T("loc.iOS Simulators.desc"),
 			Cleanable:   true,
-			CommandOnly: true, // must use simctl, not RemoveAll
-			CleanNote:   "xcrun simctl delete unavailable",
+			CommandOnly: true,
+			CleanNote:   i18n.T("loc.iOS Simulators.note"),
 			CleanFn: func() error {
 				return exec.Command("xcrun", "simctl", "delete", "unavailable").Run()
 			},
@@ -84,37 +86,37 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "iOS Device Support",
 			Path:        filepath.Join(home, "Library/Developer/Xcode/iOS DeviceSupport"),
-			Description: "Отладочные символы устройств",
+			Description: i18n.T("loc.iOS Device Support.desc"),
 			Cleanable:   true,
-			CleanNote:   "Старые версии можно удалить",
+			CleanNote:   i18n.T("loc.iOS Device Support.note"),
 		},
 		{
 			Name:        "iOS Backups",
 			Path:        filepath.Join(home, "Library/Application Support/MobileSync/Backup"),
-			Description: "Резервные копии iPhone/iPad",
+			Description: i18n.T("loc.iOS Backups.desc"),
 			Cleanable:   true,
-			CleanNote:   "Управляйте через Finder → устройство → Резервные копии",
+			CleanNote:   i18n.T("loc.iOS Backups.note"),
 		},
 		{
 			Name:        "iCloud Drive",
 			Path:        filepath.Join(home, "Library/Mobile Documents"),
-			Description: "Локальные копии iCloud Drive",
+			Description: i18n.T("loc.iCloud Drive.desc"),
 			Cleanable:   false,
-			CleanNote:   "Управляйте через Системные настройки → Apple ID",
+			CleanNote:   i18n.T("loc.iCloud Drive.note"),
 		},
 		{
 			Name:        "Downloads",
 			Path:        filepath.Join(home, "Downloads"),
-			Description: "Загрузки",
+			Description: i18n.T("loc.Downloads.desc"),
 			Cleanable:   true,
-			CleanNote:   "Проверьте содержимое вручную",
+			CleanNote:   i18n.T("loc.Downloads.note"),
 		},
 		{
 			Name:        "Trash",
 			Path:        filepath.Join(home, ".Trash"),
-			Description: "Корзина",
+			Description: i18n.T("loc.Trash.desc"),
 			Cleanable:   true,
-			CleanNote:   "Очистить корзину",
+			CleanNote:   i18n.T("loc.Trash.note"),
 			CleanFn: func() error {
 				return exec.Command("osascript", "-e",
 					`tell application "Finder" to empty trash`).Run()
@@ -123,9 +125,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "npm cache",
 			Path:        filepath.Join(home, ".npm"),
-			Description: "Кэш npm пакетов",
+			Description: i18n.T("loc.npm cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "npm cache clean --force",
+			CleanNote:   i18n.T("loc.npm cache.note"),
 			CleanFn: func() error {
 				return exec.Command("npm", "cache", "clean", "--force").Run()
 			},
@@ -133,9 +135,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "yarn cache",
 			Path:        filepath.Join(home, ".yarn/cache"),
-			Description: "Кэш Yarn",
+			Description: i18n.T("loc.yarn cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "yarn cache clean",
+			CleanNote:   i18n.T("loc.yarn cache.note"),
 			CleanFn: func() error {
 				return exec.Command("yarn", "cache", "clean").Run()
 			},
@@ -143,9 +145,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "pnpm store",
 			Path:        filepath.Join(home, ".pnpm-store"),
-			Description: "Хранилище pnpm",
+			Description: i18n.T("loc.pnpm store.desc"),
 			Cleanable:   true,
-			CleanNote:   "pnpm store prune",
+			CleanNote:   i18n.T("loc.pnpm store.note"),
 			CleanFn: func() error {
 				return exec.Command("pnpm", "store", "prune").Run()
 			},
@@ -153,9 +155,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Go modules",
 			Path:        filepath.Join(home, "go/pkg/mod"),
-			Description: "Кэш Go-модулей",
+			Description: i18n.T("loc.Go modules.desc"),
 			Cleanable:   true,
-			CleanNote:   "go clean -modcache",
+			CleanNote:   i18n.T("loc.Go modules.note"),
 			CleanFn: func() error {
 				return exec.Command("go", "clean", "-modcache").Run()
 			},
@@ -163,30 +165,30 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Gradle cache",
 			Path:        filepath.Join(home, ".gradle/caches"),
-			Description: "Кэш Gradle",
+			Description: i18n.T("loc.Gradle cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "Безопасно удалить",
+			CleanNote:   i18n.T("loc.Gradle cache.note"),
 		},
 		{
 			Name:        "Maven cache",
 			Path:        filepath.Join(home, ".m2/repository"),
-			Description: "Локальный репозиторий Maven",
+			Description: i18n.T("loc.Maven cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "Безопасно удалить",
+			CleanNote:   i18n.T("loc.Maven cache.note"),
 		},
 		{
 			Name:        "Rust cargo",
 			Path:        filepath.Join(home, ".cargo"),
-			Description: "Кэш Rust/Cargo",
+			Description: i18n.T("loc.Rust cargo.desc"),
 			Cleanable:   true,
-			CleanNote:   "cargo cache --autoclean",
+			CleanNote:   i18n.T("loc.Rust cargo.note"),
 		},
 		{
 			Name:        "pip cache",
 			Path:        filepath.Join(home, "Library/Caches/pip"),
-			Description: "Кэш Python pip",
+			Description: i18n.T("loc.pip cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "pip cache purge",
+			CleanNote:   i18n.T("loc.pip cache.note"),
 			CleanFn: func() error {
 				return exec.Command("pip", "cache", "purge").Run()
 			},
@@ -195,9 +197,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Go build cache",
 			Path:        filepath.Join(home, "Library/Caches/go-build"),
-			Description: "Кэш сборки Go",
+			Description: i18n.T("loc.Go build cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "go clean -cache",
+			CleanNote:   i18n.T("loc.Go build cache.note"),
 			CleanFn: func() error {
 				return exec.Command("go", "clean", "-cache").Run()
 			},
@@ -205,16 +207,16 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Rust toolchains",
 			Path:        filepath.Join(home, ".rustup/toolchains"),
-			Description: "Установленные версии Rust (rustup)",
+			Description: i18n.T("loc.Rust toolchains.desc"),
 			Cleanable:   true,
-			CleanNote:   "rustup toolchain list; rustup toolchain remove <version>",
+			CleanNote:   i18n.T("loc.Rust toolchains.note"),
 		},
 		{
 			Name:        "CocoaPods cache",
 			Path:        filepath.Join(home, ".cocoapods"),
-			Description: "Кэш CocoaPods (iOS/macOS зависимости)",
+			Description: i18n.T("loc.CocoaPods cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "pod cache clean --all",
+			CleanNote:   i18n.T("loc.CocoaPods cache.note"),
 			CleanFn: func() error {
 				return exec.Command("pod", "cache", "clean", "--all").Run()
 			},
@@ -222,16 +224,16 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Node-gyp cache",
 			Path:        filepath.Join(home, ".node-gyp"),
-			Description: "Кэш нативных Node.js модулей",
+			Description: i18n.T("loc.Node-gyp cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "Безопасно удалить, пересоздаётся",
+			CleanNote:   i18n.T("loc.Node-gyp cache.note"),
 		},
 		{
 			Name:        "Dart/Flutter pub",
 			Path:        filepath.Join(home, ".pub-cache"),
-			Description: "Кэш пакетов Dart/Flutter",
+			Description: i18n.T("loc.Dart/Flutter pub.desc"),
 			Cleanable:   true,
-			CleanNote:   "dart pub cache clean",
+			CleanNote:   i18n.T("loc.Dart/Flutter pub.note"),
 			CleanFn: func() error {
 				return exec.Command("dart", "pub", "cache", "clean").Run()
 			},
@@ -239,9 +241,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "NuGet packages",
 			Path:        filepath.Join(home, ".nuget/packages"),
-			Description: "Кэш пакетов .NET / NuGet",
+			Description: i18n.T("loc.NuGet packages.desc"),
 			Cleanable:   true,
-			CleanNote:   "dotnet nuget locals all --clear",
+			CleanNote:   i18n.T("loc.NuGet packages.note"),
 			CleanFn: func() error {
 				return exec.Command("dotnet", "nuget", "locals", "all", "--clear").Run()
 			},
@@ -249,9 +251,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "PlatformIO",
 			Path:        filepath.Join(home, ".platformio"),
-			Description: "Тулчейны и библиотеки PlatformIO (embedded dev)",
+			Description: i18n.T("loc.PlatformIO.desc"),
 			Cleanable:   true,
-			CleanNote:   "pio system prune",
+			CleanNote:   i18n.T("loc.PlatformIO.note"),
 			CleanFn: func() error {
 				return exec.Command("pio", "system", "prune", "--force").Run()
 			},
@@ -259,9 +261,9 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Bun packages",
 			Path:        filepath.Join(home, ".bun/install"),
-			Description: "Кэш и глобальные пакеты Bun",
+			Description: i18n.T("loc.Bun packages.desc"),
 			Cleanable:   true,
-			CleanNote:   "bun pm cache rm",
+			CleanNote:   i18n.T("loc.Bun packages.note"),
 			CleanFn: func() error {
 				return exec.Command("bun", "pm", "cache", "rm").Run()
 			},
@@ -270,23 +272,23 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "HuggingFace models",
 			Path:        filepath.Join(home, ".cache/huggingface"),
-			Description: "Локальные модели HuggingFace",
+			Description: i18n.T("loc.HuggingFace models.desc"),
 			Cleanable:   true,
-			CleanNote:   "huggingface-cli delete-cache или удалите модели вручную",
+			CleanNote:   i18n.T("loc.HuggingFace models.note"),
 		},
 		{
 			Name:        "Whisper models",
 			Path:        filepath.Join(home, ".cache/whisper"),
-			Description: "Модели OpenAI Whisper (распознавание речи)",
+			Description: i18n.T("loc.Whisper models.desc"),
 			Cleanable:   true,
-			CleanNote:   "Перескачаются при следующем запуске",
+			CleanNote:   i18n.T("loc.Whisper models.note"),
 		},
 		{
 			Name:        "uv cache",
 			Path:        filepath.Join(home, ".cache/uv"),
-			Description: "Кэш пакетного менеджера uv (Python)",
+			Description: i18n.T("loc.uv cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "uv cache clean",
+			CleanNote:   i18n.T("loc.uv cache.note"),
 			CleanFn: func() error {
 				return exec.Command("uv", "cache", "clean").Run()
 			},
@@ -294,77 +296,77 @@ func DefaultLocations(home string) []KnownLocation {
 		{
 			Name:        "Continue AI index",
 			Path:        filepath.Join(home, ".continue/index"),
-			Description: "Поисковый индекс кода Continue AI",
+			Description: i18n.T("loc.Continue AI index.desc"),
 			Cleanable:   true,
-			CleanNote:   "Пересоздаётся автоматически при открытии VS Code",
+			CleanNote:   i18n.T("loc.Continue AI index.note"),
 		},
 		// ── Editors / IDEs ───────────────────────────────────────────────────
 		{
 			Name:        "VS Code extensions",
 			Path:        filepath.Join(home, ".vscode/extensions"),
-			Description: "Расширения Visual Studio Code",
+			Description: i18n.T("loc.VS Code extensions.desc"),
 			Cleanable:   false,
-			CleanNote:   "Удалите ненужные расширения в VS Code",
+			CleanNote:   i18n.T("loc.VS Code extensions.note"),
 		},
 		// ── Python ───────────────────────────────────────────────────────────
 		{
 			Name:        "Python venv (~/.venv)",
 			Path:        filepath.Join(home, ".venv"),
-			Description: "Виртуальное окружение Python",
+			Description: i18n.T("loc.Python venv (~/.venv).desc"),
 			Cleanable:   true,
-			CleanNote:   "Удалите если окружение не нужно, пересоздаётся через python -m venv",
+			CleanNote:   i18n.T("loc.Python venv (~/.venv).note"),
 		},
 		// ── Browsers / Electron ──────────────────────────────────────────────
 		{
 			Name:        "Puppeteer Chromium",
 			Path:        filepath.Join(home, ".cache/puppeteer"),
-			Description: "Chromium для Puppeteer (браузерное тестирование)",
+			Description: i18n.T("loc.Puppeteer Chromium.desc"),
 			Cleanable:   true,
-			CleanNote:   "Перескачается при следующем использовании Puppeteer",
+			CleanNote:   i18n.T("loc.Puppeteer Chromium.note"),
 		},
 		{
 			Name:        "Electron cache",
 			Path:        filepath.Join(home, ".cache/electron"),
-			Description: "Кэш Electron SDK",
+			Description: i18n.T("loc.Electron cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "Перескачается при сборке Electron-приложений",
+			CleanNote:   i18n.T("loc.Electron cache.note"),
 		},
 		// ── Wine ─────────────────────────────────────────────────────────────
 		{
 			Name:        "Wine",
 			Path:        filepath.Join(home, ".wine"),
-			Description: "Данные Wine (запуск Windows-приложений)",
+			Description: i18n.T("loc.Wine.desc"),
 			Cleanable:   false,
-			CleanNote:   "Содержит данные Windows-приложений, удаляйте осторожно",
+			CleanNote:   i18n.T("loc.Wine.note"),
 		},
 		// ── Browsers ─────────────────────────────────────────────────────────
 		{
 			Name:        "Safari cache",
 			Path:        filepath.Join(home, "Library/Caches/com.apple.Safari"),
-			Description: "Дисковый кэш Safari",
+			Description: i18n.T("loc.Safari cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "Кэш пересоздаётся автоматически при посещении сайтов",
+			CleanNote:   i18n.T("loc.Safari cache.note"),
 		},
 		{
 			Name:        "Chrome cache",
 			Path:        filepath.Join(home, "Library/Caches/com.google.Chrome"),
-			Description: "Дисковый кэш Google Chrome",
+			Description: i18n.T("loc.Chrome cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "Кэш пересоздаётся автоматически",
+			CleanNote:   i18n.T("loc.Chrome cache.note"),
 		},
 		{
 			Name:        "Telegram",
 			Path:        filepath.Join(home, "Library/Application Support/Telegram Desktop"),
-			Description: "Данные Telegram Desktop (включая медиакэш)",
+			Description: i18n.T("loc.Telegram.desc"),
 			Cleanable:   false,
-			CleanNote:   "Очистите медиакэш через Настройки → Конфиденциальность → Хранилище",
+			CleanNote:   i18n.T("loc.Telegram.note"),
 		},
 		{
 			Name:        "Telegram (App Store)",
 			Path:        filepath.Join(home, "Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram"),
-			Description: "Данные Telegram из Mac App Store",
+			Description: i18n.T("loc.Telegram (App Store).desc"),
 			Cleanable:   false,
-			CleanNote:   "Очистите медиакэш через Настройки → Конфиденциальность → Хранилище",
+			CleanNote:   i18n.T("loc.Telegram (App Store).note"),
 		},
 	}
 
@@ -378,10 +380,10 @@ func DefaultLocations(home string) []KnownLocation {
 			locs = append(locs, KnownLocation{
 				Name:        "Docker",
 				Path:        p,
-				Description: "Docker образы и данные",
+				Description: i18n.T("loc.Docker.desc"),
 				Cleanable:   true,
-				CommandOnly: true, // must use docker daemon, not RemoveAll
-				CleanNote:   "docker system prune -a --volumes",
+				CommandOnly: true,
+				CleanNote:   i18n.T("loc.Docker.note"),
 				CleanFn: func() error {
 					return exec.Command("docker", "system", "prune", "-a", "--volumes", "-f").Run()
 				},
@@ -395,9 +397,9 @@ func DefaultLocations(home string) []KnownLocation {
 		locs = append(locs, KnownLocation{
 			Name:        "Homebrew cache",
 			Path:        brewCache,
-			Description: "Кэш Homebrew",
+			Description: i18n.T("loc.Homebrew cache.desc"),
 			Cleanable:   true,
-			CleanNote:   "brew cleanup",
+			CleanNote:   i18n.T("loc.Homebrew cache.note"),
 			CleanFn: func() error {
 				return exec.Command("brew", "cleanup").Run()
 			},
@@ -427,16 +429,14 @@ func PopulateSizes(locs []KnownLocation, sizeMap map[string]int64, scanRoot stri
 			locs[i].Size = size
 			locs[i].Exists = true
 		} else if strings.HasPrefix(path, scanRoot+"/") || path == scanRoot {
-			// Inside scan root but not in sizeMap → empty directory
 			if _, err := os.Stat(path); err == nil {
 				locs[i].Exists = true
 				locs[i].Size = 0
 			}
 		} else {
-			// Outside scan root: just check existence, don't walk (too slow)
 			if _, err := os.Stat(path); err == nil {
 				locs[i].Exists = true
-				locs[i].Size = -1 // unknown
+				locs[i].Size = -1
 			}
 		}
 	}

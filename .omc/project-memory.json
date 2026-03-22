@@ -1,0 +1,118 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1774180569801,
+  "projectRoot": "/Users/svk/Documents/Projects.nosync/godiskanal",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Go",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "go.mod"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "go",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "cmd": {
+      "path": "cmd",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1774180569776,
+      "keyFiles": [
+        "root.go"
+      ]
+    },
+    "i18n": {
+      "path": "i18n",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1774180569779,
+      "keyFiles": [
+        "en.go",
+        "i18n.go",
+        "i18n_test.go",
+        "ru.go"
+      ]
+    },
+    "llm": {
+      "path": "llm",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1774180569779,
+      "keyFiles": [
+        "client.go",
+        "client_test.go"
+      ]
+    },
+    "macos": {
+      "path": "macos",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1774180569781,
+      "keyFiles": [
+        "info.go",
+        "info_test.go"
+      ]
+    },
+    "scanner": {
+      "path": "scanner",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1774180569782,
+      "keyFiles": [
+        "scanner.go",
+        "scanner_test.go"
+      ]
+    },
+    "tui": {
+      "path": "tui",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1774180569786,
+      "keyFiles": [
+        "browser.go",
+        "cleanup.go"
+      ]
+    },
+    "ui": {
+      "path": "ui",
+      "purpose": null,
+      "fileCount": 2,
+      "lastAccessed": 1774180569789,
+      "keyFiles": [
+        "display.go",
+        "display_test.go"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}
