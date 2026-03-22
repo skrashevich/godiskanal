@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,9 @@ import (
 const (
 	barWidth  = 20
 	sizeWidth = 9
+
+	minSideWidth = 35 // minimum useful panel width
+	maxSideWidth = 52 // maximum panel width
 )
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
@@ -57,7 +61,7 @@ type DirEntry struct {
 	IsDir bool
 }
 
-// ─── Messages ─────────────────────────────────────────────────────────────────
+// ─── Messages ────────────────────────────────────────────────────────────────
 
 type loadedMsg struct {
 	path    string
@@ -71,7 +75,15 @@ type deletedMsg struct {
 	err   error
 }
 
-type llmResultMsg struct {
+// autoDescMsg carries a debounced auto-description from LLM.
+type autoDescMsg struct {
+	reqID int
+	text  string
+	err   error
+}
+
+// analysisMsg carries a deep content-analysis result from LLM (triggered by 'i').
+type analysisMsg struct {
 	text string
 	err  error
 }
@@ -89,7 +101,7 @@ type Model struct {
 	entries    []DirEntry
 	cursor     int
 	offset     int
-	parentSize int64 // total size of current dir (for relative bars)
+	parentSize int64
 
 	// Selection for deletion
 	marked map[string]int64
@@ -106,11 +118,12 @@ type Model struct {
 	loading bool
 	status  string
 
-	// LLM panel
-	llmClient  *llm.Client
-	llmText    string
-	llmLoading bool
-	showLLM    bool
+	// LLM side panel
+	llmClient       *llm.Client
+	llmPanelText    string // text shown in the right panel
+	llmPanelLoading bool
+	llmPanelIsAnalysis bool  // true when showing deep analysis
+	llmDescReqID    int      // debounce counter for auto-description
 }
 
 // New creates a new browser model. llmClient may be nil to disable LLM features.
@@ -153,14 +166,13 @@ func readDirEntries(path string, cache map[string]int64) ([]DirEntry, error) {
 	}
 	entries := make([]DirEntry, 0, len(des))
 	for _, de := range des {
-		// Skip symlinks — sizes not tracked
 		if de.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		full := filepath.Join(path, de.Name())
 		var size int64
 		if de.IsDir() {
-			size = cache[full] // 0 if not scanned
+			size = cache[full]
 		} else {
 			if info, err2 := de.Info(); err2 == nil {
 				size = info.Size()
@@ -192,21 +204,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		if msg.err != nil {
 			m.status = fmt.Sprintf("Ошибка: %v", msg.err)
-		} else {
-			m.entries = msg.entries
-			m.cursor = 0
-			m.offset = 0
-			if s, ok := m.sizeCache[m.current]; ok {
-				m.parentSize = s
-			} else {
-				var total int64
-				for _, e := range msg.entries {
-					total += e.Size
-				}
-				m.parentSize = total
-			}
+			return m, nil
 		}
-		return m, nil
+		m.entries = msg.entries
+		m.cursor = 0
+		m.offset = 0
+		if s, ok := m.sizeCache[m.current]; ok {
+			m.parentSize = s
+		} else {
+			var total int64
+			for _, e := range msg.entries {
+				total += e.Size
+			}
+			m.parentSize = total
+		}
+		// Auto-describe the first entry in the side panel
+		return m, m.autoDescCmd()
 
 	case deletedMsg:
 		m.mode = modeNormal
@@ -223,12 +236,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.cmdLoad()
 
-	case llmResultMsg:
-		m.llmLoading = false
+	case autoDescMsg:
+		// Ignore stale requests (cursor moved while LLM was running)
+		if msg.reqID == m.llmDescReqID {
+			m.llmPanelLoading = false
+			m.llmPanelIsAnalysis = false
+			if msg.err != nil {
+				m.llmPanelText = "—"
+			} else {
+				m.llmPanelText = msg.text
+			}
+		}
+		return m, nil
+
+	case analysisMsg:
+		m.llmPanelLoading = false
+		m.llmPanelIsAnalysis = true
 		if msg.err != nil {
-			m.llmText = fmt.Sprintf("Ошибка: %v", msg.err)
+			m.llmPanelText = fmt.Sprintf("Ошибка: %v", msg.err)
 		} else {
-			m.llmText = msg.text
+			m.llmPanelText = msg.text
 		}
 		return m, nil
 
@@ -241,13 +268,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Help overlay: any key closes
 	if m.mode == modeHelp {
 		m.mode = modeNormal
 		return m, nil
 	}
 
-	// Confirm deletion dialog
 	if m.mode == modeConfirm {
 		switch key {
 		case "y", "Y":
@@ -266,7 +291,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// While deleting — ignore all keys except quit
 	if m.mode == modeDeleting {
 		if key == "ctrl+c" {
 			return m, tea.Quit
@@ -276,6 +300,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Normal mode
 	listH := m.listHeight()
+	cursorMoved := false
 
 	switch key {
 	case "q", "ctrl+c":
@@ -290,6 +315,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cursor < m.offset {
 				m.offset = m.cursor
 			}
+			cursorMoved = true
 		}
 
 	case "down", "j":
@@ -298,26 +324,33 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.cursor >= m.offset+listH {
 				m.offset++
 			}
+			cursorMoved = true
 		}
 
 	case "pgup":
+		old := m.cursor
 		m.cursor = max(0, m.cursor-listH)
 		m.offset = max(0, m.offset-listH)
+		cursorMoved = m.cursor != old
 
 	case "pgdown":
 		if n := len(m.entries); n > 0 {
+			old := m.cursor
 			m.cursor = min(n-1, m.cursor+listH)
 			if m.cursor >= m.offset+listH {
 				m.offset = m.cursor - listH + 1
 			}
+			cursorMoved = m.cursor != old
 		}
 
 	case "home", "g":
+		cursorMoved = m.cursor != 0
 		m.cursor = 0
 		m.offset = 0
 
 	case "end", "G":
 		if n := len(m.entries); n > 0 {
+			cursorMoved = m.cursor != n-1
 			m.cursor = n - 1
 			m.offset = max(0, n-listH)
 		}
@@ -328,8 +361,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.current = m.entries[m.cursor].Path
 			m.loading = true
 			m.status = ""
-			m.showLLM = false
-			m.llmText = ""
+			m.llmPanelText = ""
+			m.llmPanelLoading = false
 			return m, m.cmdLoad()
 		}
 
@@ -339,8 +372,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.stack = m.stack[:len(m.stack)-1]
 			m.loading = true
 			m.status = ""
-			m.showLLM = false
-			m.llmText = ""
+			m.llmPanelText = ""
+			m.llmPanelLoading = false
 			return m, m.cmdLoad()
 		}
 
@@ -352,12 +385,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.marked[e.Path] = e.Size
 			}
-			// Advance cursor
 			if m.cursor < len(m.entries)-1 {
 				m.cursor++
 				if m.cursor >= m.offset+listH {
 					m.offset++
 				}
+				cursorMoved = true
 			}
 		}
 
@@ -378,20 +411,41 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "i":
+		// Deep analysis: list contents and ask for cleanup advice
 		if m.llmClient != nil && len(m.entries) > 0 {
 			e := m.entries[m.cursor]
-			m.showLLM = true
-			m.llmLoading = true
-			m.llmText = ""
-			return m, cmdDescribe(m.llmClient, e.Path, e.Size, e.IsDir, m.entries)
+			m.llmPanelLoading = true
+			m.llmPanelText = ""
+			m.llmPanelIsAnalysis = true
+			return m, cmdAnalyze(m.llmClient, e.Path, e.Size, e.IsDir, m.sizeCache)
 		}
 
 	case "I":
-		m.showLLM = false
-		m.llmText = ""
+		// Clear panel, return to auto-desc of current entry
+		m.llmPanelText = ""
+		m.llmPanelIsAnalysis = false
+		return m, m.autoDescCmd()
+	}
+
+	// Fire auto-description when cursor has moved
+	if cursorMoved {
+		return m, m.autoDescCmd()
 	}
 
 	return m, nil
+}
+
+// autoDescCmd increments the debounce counter and returns a command that
+// fetches a brief LLM description of the entry under the cursor.
+func (m *Model) autoDescCmd() tea.Cmd {
+	if m.llmClient == nil || len(m.entries) == 0 || !m.hasSidePanel() {
+		return nil
+	}
+	m.llmDescReqID++
+	m.llmPanelLoading = true
+	m.llmPanelText = ""
+	m.llmPanelIsAnalysis = false
+	return cmdAutoDesc(m.llmClient, m.entries[m.cursor], m.llmDescReqID)
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -407,18 +461,24 @@ func (m Model) View() string {
 		return m.renderHeader() + "\n" + m.renderDeleting()
 	}
 
-	var b strings.Builder
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n")
+	header := m.renderHeader()
+	footer := m.renderFooter()
 
+	var content string
 	if m.loading {
-		b.WriteString("\n  Загрузка...\n")
+		content = "\n  Загрузка...\n"
+	} else if m.hasSidePanel() {
+		sideW := m.sidePanelWidth()
+		lw := m.listW()
+		listH := m.listHeight()
+		leftLines := strings.Split(m.renderListFixed(lw, listH), "\n")
+		rightLines := m.renderPanelLines(sideW, listH)
+		content = mergeColumns(leftLines, lw, rightLines) + "\n"
 	} else {
-		b.WriteString(m.renderList())
+		content = m.renderList()
 	}
 
-	b.WriteString(m.renderFooter())
-	return b.String()
+	return header + "\n" + content + footer
 }
 
 func (m Model) renderHeader() string {
@@ -446,41 +506,46 @@ func (m Model) renderHeader() string {
 	return title + markedStr + "\n" + sep
 }
 
-func (m Model) renderList() string {
-	var b strings.Builder
-	listH := m.listHeight()
-	end := min(m.offset+listH, len(m.entries))
+// ── file list ─────────────────────────────────────────────────────────────────
 
-	for i := m.offset; i < end; i++ {
-		b.WriteString(m.renderEntry(i))
-		b.WriteString("\n")
-	}
-	// Fill empty rows
-	for i := end - m.offset; i < listH; i++ {
-		b.WriteString("\n")
-	}
-	return b.String()
+func (m Model) renderList() string {
+	return m.renderListFixed(m.width, m.listHeight())
 }
 
-func (m Model) renderEntry(i int) string {
+func (m Model) renderListFixed(w, h int) string {
+	var b strings.Builder
+	end := min(m.offset+h, len(m.entries))
+	for i := m.offset; i < end; i++ {
+		b.WriteString(m.renderEntry(i, w))
+		b.WriteString("\n")
+	}
+	// Fill empty rows so the column has fixed height
+	for i := end - m.offset; i < h; i++ {
+		b.WriteString("\n")
+	}
+	// Remove trailing newline (mergeColumns adds its own)
+	s := b.String()
+	if len(s) > 0 && s[len(s)-1] == '\n' {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func (m Model) renderEntry(i int, totalW int) string {
 	e := m.entries[i]
 	selected := i == m.cursor
 	_, marked := m.marked[e.Path]
 
-	// Cursor (2 chars)
 	cursor := "  "
 	if selected {
 		cursor = styleBold.Render("► ")
 	}
 
-	// Size (sizeWidth chars, right-aligned)
 	sizeStr := fmt.Sprintf("%*s", sizeWidth, ui.FormatSize(e.Size))
 	sizeStr = colorSize(e.Size, sizeStr)
 
-	// Bar (barWidth chars)
 	bar := makeBar(e.Size, m.parentSize, barWidth)
 
-	// Mark + type indicator (3 chars)
 	mark := " "
 	if marked {
 		mark = styleMarked.Render("*")
@@ -490,15 +555,13 @@ func (m Model) renderEntry(i int) string {
 		dirInd = "▸ "
 	}
 
-	// Name (remaining width)
 	name := e.Name
 	if e.IsDir {
 		name += "/"
 	}
-
 	// cursor(2) + size(sizeWidth) + sp(1) + bar(barWidth) + sp(2) + mark(1) + dirInd(2)
 	fixedCols := 2 + sizeWidth + 1 + barWidth + 2 + 1 + 2
-	nameW := m.width - fixedCols
+	nameW := totalW - fixedCols
 	if nameW < 4 {
 		nameW = 4
 	}
@@ -514,34 +577,103 @@ func (m Model) renderEntry(i int) string {
 		cursor, sizeStr, bar, mark, dirInd, name)
 }
 
-func (m Model) renderFooter() string {
-	sep := styleSep.Render(strings.Repeat("─", m.width))
+// ── right panel ───────────────────────────────────────────────────────────────
 
-	hintParts := "↑↓/jk nav  Enter/→ open  ←/Esc back  Space mark  d delete"
-	if m.llmClient != nil {
-		hintParts += "  i explain"
+// renderPanelLines returns a slice of strings (one per line) for the right panel.
+// Each line is already styled; display width may exceed panelW due to ANSI codes.
+func (m Model) renderPanelLines(panelW, maxH int) []string {
+	var lines []string
+
+	if len(m.entries) == 0 {
+		return lines
 	}
-	hintParts += "  q quit  ? help"
-	hints := styleDim.Render(hintParts)
+	e := m.entries[m.cursor]
 
-	var sb strings.Builder
-	sb.WriteString(sep + "\n" + hints)
+	// ── entry header ──
+	icon := "  "
+	if e.IsDir {
+		icon = "▸ "
+	}
+	nameRunes := []rune(e.Name)
+	if e.IsDir && len(nameRunes) < panelW-3 {
+		nameRunes = append(nameRunes, '/')
+	}
+	maxName := panelW - 4
+	if maxName < 4 {
+		maxName = 4
+	}
+	if len(nameRunes) > maxName {
+		nameRunes = append(nameRunes[:maxName-1], '…')
+	}
+	lines = append(lines, styleBold.Render(icon+string(nameRunes)))
+	lines = append(lines, styleDim.Render("  "+ui.FormatSize(e.Size)))
+	lines = append(lines, styleSep.Render(strings.Repeat("─", panelW)))
 
-	if m.status != "" {
-		sb.WriteString("\n" + m.status)
+	// ── label ──
+	if m.llmPanelIsAnalysis {
+		lines = append(lines, styleLLM.Render("  ● Анализ содержимого"))
+	} else {
+		lines = append(lines, styleDim.Render("  ○ Описание"))
 	}
 
-	if m.showLLM {
-		sb.WriteString("\n" + styleSep.Render(strings.Repeat("─", m.width)))
-		if m.llmLoading {
-			sb.WriteString("\n" + styleLLM.Render("  ⟳ LLM думает..."))
-		} else if m.llmText != "" {
-			sb.WriteString("\n" + styleLLM.Render(wrapText(m.llmText, m.width-4, "  ")))
+	// ── content ──
+	if m.llmPanelLoading {
+		spin := "⟳"
+		lines = append(lines, styleLLM.Render("  "+spin+" Думаю..."))
+	} else if m.llmPanelText != "" {
+		wrapped := strings.Split(wrapText(m.llmPanelText, panelW-3, "  "), "\n")
+		lines = append(lines, wrapped...)
+	} else {
+		lines = append(lines, styleDim.Render("  —"))
+	}
+
+	// ── hint at bottom ──
+	if !m.llmPanelIsAnalysis && m.llmClient != nil {
+		// Pad with empty lines, then show hint
+		for len(lines) < maxH-1 {
+			lines = append(lines, "")
+		}
+		if len(lines) < maxH {
+			lines = append(lines, styleDim.Render("  i: анализ содержимого"))
 		}
 	}
 
+	// Trim to maxH
+	if len(lines) > maxH {
+		lines = lines[:maxH]
+	}
+
+	return lines
+}
+
+// ── footer ────────────────────────────────────────────────────────────────────
+
+func (m Model) renderFooter() string {
+	sep := styleSep.Render(strings.Repeat("─", m.width))
+
+	var hints string
+	if m.hasSidePanel() {
+		hints = styleDim.Render(
+			"↑↓/jk нав.  Enter/→ войти  ←/Esc назад  Space отметить  d удалить  i анализ  q выйти  ? помощь",
+		)
+	} else {
+		parts := "↑↓/jk нав.  Enter/→ войти  ←/Esc назад  Space отметить  d удалить"
+		if m.llmClient != nil {
+			parts += "  i описание"
+		}
+		parts += "  q выйти  ? помощь"
+		hints = styleDim.Render(parts)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(sep + "\n" + hints)
+	if m.status != "" {
+		sb.WriteString("\n" + m.status)
+	}
 	return sb.String()
 }
+
+// ── other modes ───────────────────────────────────────────────────────────────
 
 func (m Model) renderDeleting() string {
 	var total int64
@@ -582,6 +714,12 @@ func (m Model) renderConfirm() string {
 }
 
 func (m Model) renderHelp() string {
+	llmSection := ""
+	if m.llmClient != nil {
+		llmSection = `  i               Детальный анализ содержимого
+  I               Вернуться к автодескрипции
+`
+	}
 	return `
   Управление браузером диска
   ────────────────────────────────────────
@@ -595,29 +733,79 @@ func (m Model) renderHelp() string {
   Space           Отметить для удаления
   d               Удалить отмеченные (или текущий)
   D               Удалить текущий элемент
-  i               Объяснить через LLM
-  I               Закрыть панель LLM
-  q               Выйти
+` + llmSection + `  q               Выйти
 
   Нажмите любую клавишу для возврата`
 }
 
+// ─── Geometry helpers ─────────────────────────────────────────────────────────
+
+func (m Model) hasSidePanel() bool {
+	return m.llmClient != nil && m.sidePanelWidth() >= minSideWidth
+}
+
+func (m Model) sidePanelWidth() int {
+	if m.llmClient == nil {
+		return 0
+	}
+	w := m.width / 3
+	if w < minSideWidth {
+		return 0
+	}
+	if w > maxSideWidth {
+		return maxSideWidth
+	}
+	return w
+}
+
+func (m Model) listW() int {
+	if m.hasSidePanel() {
+		return m.width - m.sidePanelWidth() - 1 // 1 for "│"
+	}
+	return m.width
+}
+
 func (m Model) listHeight() int {
-	h := m.height - 4 // header(2 lines) + footer(2 lines)
+	footerLines := 2 // sep + hints
 	if m.status != "" {
-		h--
+		footerLines++
 	}
-	if m.showLLM {
-		// separator + response (up to 3 lines)
-		h -= 2
-		if m.llmText != "" {
-			h -= countWrappedLines(m.llmText, m.width-4)
-		}
-	}
+	h := m.height - 2 - footerLines // 2 for header (title + sep)
 	if h < 2 {
 		h = 2
 	}
 	return h
+}
+
+// ─── Column merge ─────────────────────────────────────────────────────────────
+
+// mergeColumns joins left and right lines with a separator column.
+// Left lines are padded to leftW display columns.
+func mergeColumns(left []string, leftW int, right []string) string {
+	maxH := max(len(left), len(right))
+	sep := styleSep.Render("│")
+	var b strings.Builder
+	for i := 0; i < maxH; i++ {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		// Pad left to leftW using ANSI-aware width
+		visW := lipgloss.Width(l)
+		if visW < leftW {
+			l += strings.Repeat(" ", leftW-visW)
+		}
+		b.WriteString(l)
+		b.WriteString(sep)
+		b.WriteString(r)
+		if i < maxH-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // ─── Async commands ───────────────────────────────────────────────────────────
@@ -639,28 +827,82 @@ func cmdDelete(paths []string, sizes map[string]int64) tea.Cmd {
 	}
 }
 
-func cmdDescribe(client *llm.Client, path string, size int64, isDir bool, siblings []DirEntry) tea.Cmd {
+// cmdAutoDesc fires after a short debounce delay and returns a brief description.
+func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int) tea.Cmd {
 	return func() tea.Msg {
+		time.Sleep(450 * time.Millisecond) // debounce: ignore stale requests
+		kind := "файл"
+		if entry.IsDir {
+			kind = "директория"
+		}
+		prompt := fmt.Sprintf(
+			"Путь: %s\nТип: %s\nРазмер: %s\n\nКратко объясни что это и безопасно ли удалить.",
+			entry.Path, kind, ui.FormatSize(entry.Size),
+		)
+		text, err := client.Describe(prompt)
+		return autoDescMsg{reqID: reqID, text: text, err: err}
+	}
+}
+
+// cmdAnalyze reads directory contents and asks LLM for cleanup advice.
+func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCache map[string]int64) tea.Cmd {
+	return func() tea.Msg {
+		var sb strings.Builder
 		kind := "файл"
 		if isDir {
 			kind = "директория"
 		}
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Путь: %s\nТип: %s\nРазмер: %s\n",
+		sb.WriteString(fmt.Sprintf("Анализ: %s\nТип: %s\nРазмер: %s\n",
 			path, kind, ui.FormatSize(size)))
-		// Include top siblings for context
-		if len(siblings) > 0 {
-			sb.WriteString("\nТоп элементов в родительской директории:\n")
-			for i, s := range siblings {
-				if i >= 5 {
-					break
+
+		if isDir {
+			entries, err := os.ReadDir(path)
+			if err == nil && len(entries) > 0 {
+				type item struct {
+					name  string
+					size  int64
+					isDir bool
 				}
-				sb.WriteString(fmt.Sprintf("  %s — %s\n", s.Name, ui.FormatSize(s.Size)))
+				var items []item
+				for _, e := range entries {
+					if e.Type()&os.ModeSymlink != 0 {
+						continue
+					}
+					ep := filepath.Join(path, e.Name())
+					var s int64
+					if e.IsDir() {
+						s = sizeCache[ep]
+					} else if info, err2 := e.Info(); err2 == nil {
+						s = info.Size()
+					}
+					items = append(items, item{e.Name(), s, e.IsDir()})
+				}
+				sort.Slice(items, func(i, j int) bool {
+					return items[i].size > items[j].size
+				})
+				sb.WriteString("\nСодержимое (топ 15 по размеру):\n")
+				for i, it := range items {
+					if i >= 15 {
+						break
+					}
+					suffix := ""
+					if it.isDir {
+						suffix = "/"
+					}
+					sb.WriteString(fmt.Sprintf("  %-38s %s\n",
+						it.name+suffix, ui.FormatSize(it.size)))
+				}
 			}
 		}
-		sb.WriteString("\nЧто это? Стоит ли удалить для экономии места?")
+
+		sb.WriteString("\nОтветь на русском:\n")
+		sb.WriteString("1. Что это и зачем нужно?\n")
+		sb.WriteString("2. Что можно безопасно удалить и сколько места освободится?\n")
+		sb.WriteString("3. Какой риск при удалении?\n")
+		sb.WriteString("4. Конкретные команды или пути для очистки.")
+
 		text, err := client.Describe(sb.String())
-		return llmResultMsg{text: text, err: err}
+		return analysisMsg{text: text, err: err}
 	}
 }
 
@@ -682,11 +924,11 @@ func makeBar(size, total int64, width int) string {
 
 func colorSize(size int64, s string) string {
 	switch {
-	case size >= 10<<30: // ≥10 GB
+	case size >= 10<<30:
 		return sizeStyleRed.Render(s)
-	case size >= 1<<30: // ≥1 GB
+	case size >= 1<<30:
 		return sizeStyleYellow.Render(s)
-	case size >= 50<<20: // ≥50 MB
+	case size >= 50<<20:
 		return sizeStyleCyan.Render(s)
 	default:
 		return sizeStyleGreen.Render(s)
@@ -725,31 +967,4 @@ func wrapText(text string, maxWidth int, indent string) string {
 		}
 	}
 	return b.String()
-}
-
-func countWrappedLines(text string, maxWidth int) int {
-	if maxWidth <= 0 {
-		return 1
-	}
-	count := 0
-	for _, line := range strings.Split(text, "\n") {
-		words := strings.Fields(line)
-		col := 0
-		for _, w := range words {
-			wl := utf8.RuneCountInString(w)
-			if col == 0 {
-				col = wl
-				count++
-			} else if col+1+wl <= maxWidth {
-				col += 1 + wl
-			} else {
-				col = wl
-				count++
-			}
-		}
-		if len(words) == 0 {
-			count++
-		}
-	}
-	return max(count, 1)
 }
