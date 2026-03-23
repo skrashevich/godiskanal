@@ -355,6 +355,21 @@ func DefaultLocations(home string) []KnownLocation {
 			CleanNote:   i18n.T("loc.Chrome cache.note"),
 		},
 		{
+			Name:        "Firefox cache",
+			Path:        filepath.Join(home, "Library/Caches/Firefox"),
+			Description: i18n.T("loc.Firefox cache.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Firefox cache.note"),
+		},
+		{
+			Name:        "Firefox cache (alt)",
+			Path:        filepath.Join(home, "Library/Caches/org.mozilla.firefox"),
+			Description: i18n.T("loc.Firefox cache (alt).desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Firefox cache (alt).note"),
+		},
+		// ── Messengers / Apps ────────────────────────────────────────────────
+		{
 			Name:        "Telegram",
 			Path:        filepath.Join(home, "Library/Application Support/Telegram Desktop"),
 			Description: i18n.T("loc.Telegram.desc"),
@@ -367,6 +382,165 @@ func DefaultLocations(home string) []KnownLocation {
 			Description: i18n.T("loc.Telegram (App Store).desc"),
 			Cleanable:   false,
 			CleanNote:   i18n.T("loc.Telegram (App Store).note"),
+		},
+		{
+			Name:        "Slack",
+			Path:        filepath.Join(home, "Library/Application Support/Slack"),
+			Description: i18n.T("loc.Slack.desc"),
+			Cleanable:   false,
+			CleanNote:   i18n.T("loc.Slack.note"),
+		},
+		{
+			Name:        "Discord",
+			Path:        filepath.Join(home, "Library/Application Support/discord"),
+			Description: i18n.T("loc.Discord.desc"),
+			Cleanable:   false,
+			CleanNote:   i18n.T("loc.Discord.note"),
+		},
+		{
+			Name:        "Spotify cache",
+			Path:        filepath.Join(home, "Library/Caches/com.spotify.client"),
+			Description: i18n.T("loc.Spotify cache.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Spotify cache.note"),
+		},
+		{
+			Name:        "Zoom",
+			Path:        filepath.Join(home, "Library/Application Support/zoom.us"),
+			Description: i18n.T("loc.Zoom.desc"),
+			Cleanable:   false,
+			CleanNote:   i18n.T("loc.Zoom.note"),
+		},
+		{
+			Name:        "Steam",
+			Path:        filepath.Join(home, "Library/Application Support/Steam"),
+			Description: i18n.T("loc.Steam.desc"),
+			Cleanable:   false,
+			CleanNote:   i18n.T("loc.Steam.note"),
+		},
+		// ── Xcode extras ─────────────────────────────────────────────────────
+		{
+			Name:        "Xcode Archives",
+			Path:        filepath.Join(home, "Library/Developer/Xcode/Archives"),
+			Description: i18n.T("loc.Xcode Archives.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Xcode Archives.note"),
+		},
+		{
+			Name:        "Xcode Previews",
+			Path:        filepath.Join(home, "Library/Developer/Xcode/UserData/Previews"),
+			Description: i18n.T("loc.Xcode Previews.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Xcode Previews.note"),
+		},
+		// ── Android ──────────────────────────────────────────────────────────
+		{
+			Name:        "Android SDK",
+			Path:        filepath.Join(home, "Library/Android/sdk"),
+			Description: i18n.T("loc.Android SDK.desc"),
+			Cleanable:   false,
+			CleanNote:   i18n.T("loc.Android SDK.note"),
+		},
+		// ── JetBrains ────────────────────────────────────────────────────────
+		{
+			Name:        "JetBrains caches",
+			Path:        filepath.Join(home, "Library/Caches/JetBrains"),
+			Description: i18n.T("loc.JetBrains caches.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.JetBrains caches.note"),
+		},
+		// ── PHP ──────────────────────────────────────────────────────────────
+		{
+			Name:        "Composer cache",
+			Path:        filepath.Join(home, ".composer/cache"),
+			Description: i18n.T("loc.Composer cache.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Composer cache.note"),
+			CleanFn: func() error {
+				return exec.Command("composer", "clear-cache").Run()
+			},
+		},
+		// ── Ruby ─────────────────────────────────────────────────────────────
+		{
+			Name:        "Ruby gems",
+			Path:        filepath.Join(home, ".gem"),
+			Description: i18n.T("loc.Ruby gems.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Ruby gems.note"),
+			CleanFn: func() error {
+				return exec.Command("gem", "cleanup").Run()
+			},
+		},
+		// ── Testing frameworks ───────────────────────────────────────────────
+		{
+			Name:        "Cypress cache",
+			Path:        filepath.Join(home, ".cache/Cypress"),
+			Description: i18n.T("loc.Cypress cache.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Cypress cache.note"),
+		},
+		{
+			Name:        "Playwright browsers",
+			Path:        filepath.Join(home, ".cache/ms-playwright"),
+			Description: i18n.T("loc.Playwright browsers.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Playwright browsers.note"),
+		},
+		// ── AI / ML (extended) ───────────────────────────────────────────────
+		{
+			Name:        "Ollama models",
+			Path:        filepath.Join(home, ".ollama/models"),
+			Description: i18n.T("loc.Ollama models.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Ollama models.note"),
+		},
+		{
+			Name:        "PyTorch Hub",
+			Path:        filepath.Join(home, ".cache/torch"),
+			Description: i18n.T("loc.PyTorch Hub.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.PyTorch Hub.note"),
+		},
+		// ── Python (extended) ────────────────────────────────────────────────
+		{
+			Name:        "Poetry cache",
+			Path:        filepath.Join(home, "Library/Caches/pypoetry"),
+			Description: i18n.T("loc.Poetry cache.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Poetry cache.note"),
+			CleanFn: func() error {
+				return exec.Command("poetry", "cache", "clear", "--all", ".").Run()
+			},
+		},
+		// ── System ───────────────────────────────────────────────────────────
+		{
+			Name:        "Application logs",
+			Path:        filepath.Join(home, "Library/Logs"),
+			Description: i18n.T("loc.Application logs.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Application logs.note"),
+		},
+		{
+			Name:        "Saved Application State",
+			Path:        filepath.Join(home, "Library/Saved Application State"),
+			Description: i18n.T("loc.Saved Application State.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Saved Application State.note"),
+		},
+		{
+			Name:        "Mail Downloads",
+			Path:        filepath.Join(home, "Library/Containers/com.apple.mail/Data/Library/Mail Downloads"),
+			Description: i18n.T("loc.Mail Downloads.desc"),
+			Cleanable:   true,
+			CleanNote:   i18n.T("loc.Mail Downloads.note"),
+		},
+		// ── Editors (extended) ───────────────────────────────────────────────
+		{
+			Name:        "Cursor extensions",
+			Path:        filepath.Join(home, ".cursor/extensions"),
+			Description: i18n.T("loc.Cursor extensions.desc"),
+			Cleanable:   false,
+			CleanNote:   i18n.T("loc.Cursor extensions.note"),
 		},
 	}
 
@@ -404,6 +578,29 @@ func DefaultLocations(home string) []KnownLocation {
 				return exec.Command("brew", "cleanup").Run()
 			},
 		})
+	}
+
+	// Conda / Anaconda / Miniconda: check different possible cache paths
+	condaPkgPaths := []string{
+		filepath.Join(home, "miniconda3/pkgs"),
+		filepath.Join(home, "anaconda3/pkgs"),
+		filepath.Join(home, "miniforge3/pkgs"),
+	}
+	for _, p := range condaPkgPaths {
+		if _, err := os.Stat(p); err == nil {
+			locs = append(locs, KnownLocation{
+				Name:        "Conda cache",
+				Path:        p,
+				Description: i18n.T("loc.Conda.desc"),
+				Cleanable:   true,
+				CommandOnly: true,
+				CleanNote:   i18n.T("loc.Conda.note"),
+				CleanFn: func() error {
+					return exec.Command("conda", "clean", "--all", "-y").Run()
+				},
+			})
+			break
+		}
 	}
 
 	return locs
