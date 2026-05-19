@@ -1,5 +1,5 @@
 # godiskanal
-[![Go Report Card](https://goreportcard.com/badge/github.com/skrashevich/godiskanal)](https://goreportcard.com/report/github.com/skrashevich/godiskanal)
+[![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen?style=flat&logo=go)](https://goreportcard.com/report/github.com/skrashevich/godiskanal)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/skrashevich/godiskanal.svg)](https://pkg.go.dev/github.com/skrashevich/godiskanal)
 [![GitHub release](https://img.shields.io/github/v/release/skrashevich/godiskanal?include_prereleases)](https://github.com/skrashevich/godiskanal/releases)
