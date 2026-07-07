@@ -8,6 +8,25 @@ import (
 
 // ─── PopulateSizes ────────────────────────────────────────────────────────────
 
+func TestPopulateSizes_DataVolumeAlias(t *testing.T) {
+	home := "/Users/testuser"
+	cache := filepath.Join(home, "Library/Caches")
+	scanRoot := "/System/Volumes/Data"
+	sizeMap := map[string]int64{
+		"/System/Volumes/Data/Users/testuser/Library/Caches": 5555,
+	}
+
+	locs := []KnownLocation{{Path: cache}}
+	PopulateSizes(locs, sizeMap, scanRoot)
+
+	if locs[0].Size != 5555 {
+		t.Errorf("Size = %d, want 5555 via Data volume alias", locs[0].Size)
+	}
+	if !locs[0].Exists {
+		t.Error("Exists should be true")
+	}
+}
+
 func TestPopulateSizes_FromSizeMap(t *testing.T) {
 	tmp := t.TempDir()
 	sub := filepath.Join(tmp, "sub")

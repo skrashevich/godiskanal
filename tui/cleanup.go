@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,11 +60,12 @@ type drillItemDoneMsg struct {
 // ─── Entry types ──────────────────────────────────────────────────────────────
 
 type cleanEntry struct {
-	loc      macos.KnownLocation
-	selected bool
-	cleaning bool
-	cleaned  bool
-	err      error
+	loc          macos.KnownLocation
+	selected     bool
+	cleaning     bool
+	cleaned      bool
+	err          error
+	partialPaths map[string]int64 // non-nil = delete only these paths (drill selections)
 }
 
 type drillEntry struct {
@@ -93,6 +95,9 @@ type CleanupModel struct {
 
 	commandOnly []macos.KnownLocation
 	sizeMap     map[string]int64
+
+	// drill selection persistence: parentPath → (childPath → size)
+	drillSelections map[string]map[string]int64
 
 	// drill-down state
 	drillParentName string
@@ -129,12 +134,13 @@ func NewCleanup(locs []macos.KnownLocation, sizeMap map[string]int64) CleanupMod
 		sizeMap = map[string]int64{}
 	}
 	return CleanupModel{
-		items:       items,
-		commandOnly: cmdOnly,
-		maxSize:     maxSize,
-		sizeMap:     sizeMap,
-		width:       80,
-		height:      24,
+		items:           items,
+		commandOnly:     cmdOnly,
+		maxSize:         maxSize,
+		sizeMap:         sizeMap,
+		drillSelections: make(map[string]map[string]int64),
+		width:           80,
+		height:          24,
 	}
 }
 
@@ -164,13 +170,14 @@ func (m CleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.items[msg.idx].cleaning = false
 		m.items[msg.idx].cleaned = true
 		m.items[msg.idx].err = msg.err
-		for i, it := range m.items {
-			if it.selected && !it.cleaned {
+		for i := range m.items {
+			if m.items[i].selected && !m.items[i].cleaned {
 				m.items[i].cleaning = true
-				return m, cmdCleanEntry(i, it.loc)
+				return m, cmdCleanEntry(i, m.items[i])
 			}
 		}
 		m.mode = cleanDone
+		m.drillSelections = make(map[string]map[string]int64)
 		return m, nil
 
 	// ── drill-down events ──────────────────────────────────────────────────
@@ -179,6 +186,14 @@ func (m CleanupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.drillMaxSize = msg.maxSize
 		m.drillCursor = 0
 		m.drillOffset = 0
+		// Restore saved drill selections
+		if saved, ok := m.drillSelections[m.drillParentPath]; ok {
+			for i := range m.drillEntries {
+				if _, sel := saved[m.drillEntries[i].path]; sel {
+					m.drillEntries[i].selected = true
+				}
+			}
+		}
 		// transition to drill mode only after load completes
 		m.mode = cleanDrill
 		return m, nil
@@ -233,6 +248,8 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// ── drill done: any key → back to main list ────────────────────────────
 	if m.mode == cleanDrillDone {
+		// Clear drill selections for completed cleanup
+		delete(m.drillSelections, m.drillParentPath)
 		m.mode = cleanSelect
 		m.drillEntries = nil
 		return m, nil
@@ -248,14 +265,21 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "y", "Y":
 			m.mode = cleanRunning
-			for i, it := range m.items {
-				if it.selected {
+			for i := range m.items {
+				if m.items[i].selected {
 					m.items[i].cleaning = true
-					return m, tea.Batch(cmdCleanEntry(i, it.loc), cleanTick())
+					return m, tea.Batch(cmdCleanEntry(i, m.items[i]), cleanTick())
 				}
 			}
 			m.mode = cleanDone
 		default:
+			// Undo drill selection application
+			for i := range m.items {
+				if m.items[i].partialPaths != nil {
+					m.items[i].selected = false
+					m.items[i].partialPaths = nil
+				}
+			}
 			m.mode = cleanSelect
 		}
 		return m, nil
@@ -321,6 +345,9 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		if len(m.items) > 0 {
 			m.items[m.cursor].selected = !m.items[m.cursor].selected
+			if m.items[m.cursor].selected {
+				delete(m.drillSelections, m.items[m.cursor].loc.Path)
+			}
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
 				if m.cursor >= m.offset+listH {
@@ -339,6 +366,9 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		for i := range m.items {
 			m.items[i].selected = !allOn
+			if !allOn {
+				delete(m.drillSelections, m.items[i].loc.Path)
+			}
 		}
 
 	case "enter":
@@ -356,6 +386,17 @@ func (m CleanupModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "c", "C":
+		// Apply drill selections to items as partial paths
+		for i := range m.items {
+			if sel, ok := m.drillSelections[m.items[i].loc.Path]; ok && len(sel) > 0 && !m.items[i].selected {
+				m.items[i].selected = true
+				cp := make(map[string]int64, len(sel))
+				for k, v := range sel {
+					cp[k] = v
+				}
+				m.items[i].partialPaths = cp
+			}
+		}
 		// Confirm bulk cleanup of selected items
 		for _, it := range m.items {
 			if it.selected {
@@ -373,6 +414,18 @@ func (m CleanupModel) handleDrillKey(key string) (tea.Model, tea.Cmd) {
 
 	switch key {
 	case "q", "esc", "backspace", "left", "h":
+		// Persist drill selections before returning to main list
+		selected := make(map[string]int64)
+		for _, e := range m.drillEntries {
+			if e.selected {
+				selected[e.path] = e.size
+			}
+		}
+		if len(selected) > 0 {
+			m.drillSelections[m.drillParentPath] = selected
+		} else {
+			delete(m.drillSelections, m.drillParentPath)
+		}
 		m.mode = cleanSelect
 		m.drillEntries = nil
 		return m, nil
@@ -502,7 +555,7 @@ func (m CleanupModel) renderHeader() string {
 	for _, it := range m.items {
 		if it.selected {
 			selCount++
-			selSize += it.loc.Size
+			selSize += it.effectiveSize()
 		}
 	}
 	sel := ""
@@ -558,6 +611,8 @@ func (m CleanupModel) renderEntry(i int) string {
 	check := "[ ] "
 	if it.selected {
 		check = styleMarked.Render("[✓]") + " "
+	} else if sel, ok := m.drillSelections[it.loc.Path]; ok && len(sel) > 0 {
+		check = styleMarked.Render("[~]") + " "
 	}
 
 	sz := fmt.Sprintf("%*s", sizeWidth, ui.FormatSize(it.loc.Size))
@@ -595,9 +650,14 @@ func (m CleanupModel) renderConfirm() string {
 		if !it.selected {
 			continue
 		}
-		total += it.loc.Size
+		size := it.effectiveSize()
+		total += size
+		name := it.loc.Name
+		if it.partialPaths != nil {
+			name = fmt.Sprintf("%s [%d]", name, len(it.partialPaths))
+		}
 		lines = append(lines,
-			fmt.Sprintf("    • %-28s %s", it.loc.Name, ui.FormatSize(it.loc.Size)))
+			fmt.Sprintf("    • %-28s %s", name, ui.FormatSize(size)))
 	}
 
 	var b strings.Builder
@@ -619,9 +679,13 @@ func (m CleanupModel) renderRunning() string {
 			continue
 		}
 		icon, status := m.runningItemStatus(it.cleaning, it.cleaned, it.err)
-		sz := fmt.Sprintf("%9s", ui.FormatSize(it.loc.Size))
+		name := it.loc.Name
+		if it.partialPaths != nil {
+			name = fmt.Sprintf("%s [%d]", name, len(it.partialPaths))
+		}
+		sz := fmt.Sprintf("%9s", ui.FormatSize(it.effectiveSize()))
 		b.WriteString(fmt.Sprintf("  %s  %s  %-28s  %s\n",
-			icon, sz, truncate(it.loc.Name, 28), status))
+			icon, sz, truncate(name, 28), status))
 	}
 	return b.String()
 }
@@ -639,13 +703,18 @@ func (m CleanupModel) renderDone() string {
 			continue
 		}
 		icon, st := m.runningItemStatus(it.cleaning, it.cleaned, it.err)
-		sz := fmt.Sprintf("%9s", ui.FormatSize(it.loc.Size))
+		name := it.loc.Name
+		if it.partialPaths != nil {
+			name = fmt.Sprintf("%s [%d]", name, len(it.partialPaths))
+		}
+		size := it.effectiveSize()
+		sz := fmt.Sprintf("%9s", ui.FormatSize(size))
 		b.WriteString(fmt.Sprintf("  %s  %s  %-28s  %s\n",
-			icon, sz, truncate(it.loc.Name, 28), st))
+			icon, sz, truncate(name, 28), st))
 		if it.err != nil {
 			errs++
 		} else {
-			freed += it.loc.Size
+			freed += size
 		}
 	}
 
@@ -843,6 +912,19 @@ func (m CleanupModel) runningItemStatus(cleaning, cleaned bool, err error) (icon
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+func (e cleanEntry) effectiveSize() int64 {
+	if e.partialPaths == nil {
+		return e.loc.Size
+	}
+	var total int64
+	for _, s := range e.partialPaths {
+		if s > 0 {
+			total += s
+		}
+	}
+	return total
+}
+
 func (m CleanupModel) listHeight() int {
 	h := m.height - 4 // header(3 with path) + footer(2)
 	if h < 2 {
@@ -941,15 +1023,22 @@ func cmdCleanDrillEntry(idx int, path string) tea.Cmd {
 	}
 }
 
-func cmdCleanEntry(idx int, loc macos.KnownLocation) tea.Cmd {
+func cmdCleanEntry(idx int, entry cleanEntry) tea.Cmd {
 	return func() tea.Msg {
 		var err error
-		if loc.CommandOnly && loc.CleanFn != nil {
-			err = loc.CleanFn()
-		} else if loc.Path != "" {
-			err = removeContents(loc.Path)
-		} else if loc.CleanFn != nil {
-			err = loc.CleanFn()
+		if entry.partialPaths != nil {
+			// Partial cleanup: remove only drill-selected paths
+			for p := range entry.partialPaths {
+				if e := os.RemoveAll(p); e != nil {
+					err = errors.Join(err, e)
+				}
+			}
+		} else if entry.loc.CommandOnly && entry.loc.CleanFn != nil {
+			err = entry.loc.CleanFn()
+		} else if entry.loc.Path != "" {
+			err = removeContents(entry.loc.Path)
+		} else if entry.loc.CleanFn != nil {
+			err = entry.loc.CleanFn()
 		}
 		return cleanItemDoneMsg{idx: idx, err: err}
 	}

@@ -165,6 +165,11 @@ func truncatePath(path string, width int) string {
 	return "…" + string(runes[len(runes)-(width-1):])
 }
 
+// TermWidth returns the current terminal column width, defaulting to 80.
+func TermWidth() int {
+	return termWidth()
+}
+
 // termWidth returns the current terminal column width, defaulting to 80.
 func termWidth() int {
 	var ws struct{ Row, Col, Xpixel, Ypixel uint16 }

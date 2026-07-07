@@ -14,6 +14,7 @@ import (
 
 	"github.com/skrashevich/godiskanal/i18n"
 	"github.com/skrashevich/godiskanal/llm"
+	"github.com/skrashevich/godiskanal/macos"
 	"github.com/skrashevich/godiskanal/ui"
 )
 
@@ -105,7 +106,9 @@ type Model struct {
 	parentSize int64
 
 	// Selection for deletion
-	marked map[string]int64
+	marked        map[string]int64
+	markedRelated map[string]string // related Library path → parent .app path
+	homes         []string          // user homes for app-related file discovery
 
 	// Pre-computed sizes from scanner (path → bytes)
 	sizeCache map[string]int64
@@ -120,21 +123,29 @@ type Model struct {
 	status  string
 
 	// LLM side panel
-	llmClient       *llm.Client
-	llmPanelText    string // text shown in the right panel
-	llmPanelLoading bool
-	llmPanelIsAnalysis bool  // true when showing deep analysis
-	llmDescReqID    int      // debounce counter for auto-description
+	llmClient          *llm.Client
+	llmKnownHints      []KnownHint
+	llmPanelText       string
+	llmPanelLoading    bool
+	llmPanelIsAnalysis bool
+	llmDescReqID       int
 }
 
 // New creates a new browser model. llmClient may be nil to disable LLM features.
-func New(root string, sizeCache map[string]int64, llmClient *llm.Client) Model {
+// knownHints enriches LLM prompts when the current path matches a scanner-known location.
+func New(root string, sizeCache map[string]int64, llmClient *llm.Client, knownHints []KnownHint, homes []string) Model {
+	if len(homes) == 0 {
+		homes = macos.TargetHomes(macos.ResolveTargetHome(""))
+	}
 	m := Model{
-		root:      root,
-		current:   root,
-		marked:    make(map[string]int64),
-		sizeCache: sizeCache,
-		llmClient: llmClient,
+		root:          root,
+		current:       root,
+		marked:        make(map[string]int64),
+		markedRelated: make(map[string]string),
+		homes:         homes,
+		sizeCache:     sizeCache,
+		llmClient:     llmClient,
+		llmKnownHints: knownHints,
 		width:     80,
 		height:    24,
 		loading:   true,
@@ -224,6 +235,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case deletedMsg:
 		m.mode = modeNormal
+		m.markedRelated = make(map[string]string)
 		if msg.err != nil {
 			m.status = i18n.Tf("browser.delete_error", msg.err)
 		} else {
@@ -287,6 +299,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmdDelete(paths, sizes)
 		default:
 			m.mode = modeNormal
+			m.markedRelated = make(map[string]string)
 			m.status = i18n.T("browser.delete_cancel")
 		}
 		return m, nil
@@ -397,18 +410,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "d":
 		if len(m.marked) > 0 {
-			m.mode = modeConfirm
+			m.prepareDeleteConfirm()
 		} else if len(m.entries) > 0 {
 			e := m.entries[m.cursor]
 			m.marked = map[string]int64{e.Path: e.Size}
-			m.mode = modeConfirm
+			m.prepareDeleteConfirm()
 		}
 
 	case "D":
 		if len(m.entries) > 0 {
 			e := m.entries[m.cursor]
 			m.marked = map[string]int64{e.Path: e.Size}
-			m.mode = modeConfirm
+			m.prepareDeleteConfirm()
 		}
 
 	case "i":
@@ -418,7 +431,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.llmPanelLoading = true
 			m.llmPanelText = ""
 			m.llmPanelIsAnalysis = true
-			return m, cmdAnalyze(m.llmClient, e.Path, e.Size, e.IsDir, m.sizeCache)
+			return m, cmdAnalyze(m.llmClient, e.Path, e.Size, e.IsDir, m.sizeCache, m.llmKnownHints)
 		}
 
 	case "I":
@@ -446,7 +459,7 @@ func (m *Model) autoDescCmd() tea.Cmd {
 	m.llmPanelLoading = true
 	m.llmPanelText = ""
 	m.llmPanelIsAnalysis = false
-	return cmdAutoDesc(m.llmClient, m.entries[m.cursor], m.llmDescReqID, m.entries, m.current, m.sizeCache)
+	return cmdAutoDesc(m.llmClient, m.entries[m.cursor], m.llmDescReqID, m.entries, m.current, m.sizeCache, m.llmKnownHints)
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -621,8 +634,7 @@ func (m Model) renderPanelLines(panelW, maxH int) []string {
 	if m.llmPanelLoading {
 		lines = append(lines, styleLLM.Render(i18n.T("browser.panel.thinking")))
 	} else if m.llmPanelText != "" {
-		wrapped := strings.Split(wrapText(m.llmPanelText, panelW-3, "  "), "\n")
-		lines = append(lines, wrapped...)
+		lines = append(lines, formatLLMPanelLines(m.llmPanelText, panelW)...)
 	} else {
 		lines = append(lines, styleDim.Render("  —"))
 	}
@@ -702,11 +714,26 @@ func (m Model) renderConfirm() string {
 
 	var b strings.Builder
 	b.WriteString(i18n.Tf("browser.confirm", len(m.marked), ui.FormatSize(total)))
+	if len(m.markedRelated) > 0 {
+		b.WriteString(i18n.T("browser.confirm.app_related"))
+	}
 	for _, p := range paths {
-		b.WriteString(fmt.Sprintf("    %s  (%s)\n", p, ui.FormatSize(m.marked[p])))
+		line := fmt.Sprintf("    %s  (%s)", p, ui.FormatSize(m.marked[p]))
+		if app, ok := m.markedRelated[p]; ok {
+			line += i18n.Tf("browser.confirm.related", filepath.Base(app))
+		}
+		b.WriteString(line + "\n")
 	}
 	b.WriteString(i18n.T("browser.confirm_yes"))
 	return b.String()
+}
+
+// prepareDeleteConfirm expands .app deletions with related Library files before confirm UI.
+func (m *Model) prepareDeleteConfirm() {
+	expanded, related := macos.ExpandAppDeleteTargets(m.marked, m.homes, m.sizeCache)
+	m.marked = expanded
+	m.markedRelated = related
+	m.mode = modeConfirm
 }
 
 func (m Model) renderHelp() string {
@@ -808,7 +835,7 @@ func cmdDelete(paths []string, sizes map[string]int64) tea.Cmd {
 
 // cmdAutoDesc fires after a short debounce delay and returns a brief description.
 // It includes directory contents and sibling context for more useful LLM responses.
-func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int, siblings []DirEntry, parentPath string, sizeCache map[string]int64) tea.Cmd {
+func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int, siblings []DirEntry, parentPath string, sizeCache map[string]int64, hints []KnownHint) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(450 * time.Millisecond) // debounce: ignore stale requests
 		kind := i18n.T("browser.llm.file")
@@ -819,6 +846,7 @@ func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int, siblings []DirEn
 		var sb strings.Builder
 		sb.WriteString(i18n.Tf("browser.llm.auto_header",
 			parentPath, entry.Name, kind, ui.FormatSize(entry.Size)))
+		appendKnownHint(&sb, entry.Path, hints)
 
 		// Add sibling context (top entries in the same directory)
 		if len(siblings) > 0 {
@@ -869,7 +897,7 @@ func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int, siblings []DirEn
 				sb.WriteString(i18n.T("browser.llm.auto_children"))
 				for i, it := range items {
 					if i >= 8 {
-						sb.WriteString(fmt.Sprintf("  ... (+%d ещё)\n", len(items)-8))
+						sb.WriteString(i18n.Tf("browser.llm.more_entries", len(items)-8))
 						break
 					}
 					suffix := ""
@@ -884,13 +912,13 @@ func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int, siblings []DirEn
 
 		sb.WriteString(i18n.T("browser.llm.auto_ask"))
 
-		text, err := client.Describe(sb.String())
+		text, err := client.DescribeAuto(sb.String())
 		return autoDescMsg{reqID: reqID, text: text, err: err}
 	}
 }
 
 // cmdAnalyze reads directory contents and asks LLM for cleanup advice.
-func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCache map[string]int64) tea.Cmd {
+func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCache map[string]int64, hints []KnownHint) tea.Cmd {
 	return func() tea.Msg {
 		var sb strings.Builder
 		kind := i18n.T("browser.llm.file")
@@ -899,6 +927,7 @@ func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCac
 		}
 		sb.WriteString(i18n.Tf("browser.llm.analyze",
 			path, kind, ui.FormatSize(size)))
+		appendKnownHint(&sb, path, hints)
 
 		if isDir {
 			entries, err := os.ReadDir(path)
@@ -942,7 +971,7 @@ func cmdAnalyze(client *llm.Client, path string, size int64, isDir bool, sizeCac
 
 		sb.WriteString(i18n.T("browser.llm.questions"))
 
-		text, err := client.Describe(sb.String())
+		text, err := client.DescribeAnalyze(sb.String())
 		return analysisMsg{text: text, err: err}
 	}
 }
@@ -974,6 +1003,18 @@ func colorSize(size int64, s string) string {
 	default:
 		return sizeStyleGreen.Render(s)
 	}
+}
+
+func formatLLMPanelLines(text string, panelW int) []string {
+	formatted, err := ui.RenderMarkdownWidth(text, panelW)
+	if err != nil {
+		return strings.Split(wrapText(text, panelW-3, "  "), "\n")
+	}
+	formatted = strings.TrimRight(formatted, "\n")
+	if formatted == "" {
+		return nil
+	}
+	return strings.Split(formatted, "\n")
 }
 
 // wrapText wraps text at maxWidth, prefixing each line with indent.

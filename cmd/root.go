@@ -19,6 +19,7 @@ import (
 	"github.com/skrashevich/godiskanal/scanner"
 	"github.com/skrashevich/godiskanal/tui"
 	"github.com/skrashevich/godiskanal/ui"
+	"github.com/skrashevich/godiskanal/version"
 )
 
 var (
@@ -33,6 +34,7 @@ var (
 	minSize       int64
 	oneFilesystem bool
 	excludePaths  []string
+	showVersion   bool
 )
 
 func Execute() {
@@ -45,8 +47,15 @@ func Execute() {
 		RunE:          run,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PreRun: func(cmd *cobra.Command, args []string) {
+			if showVersion {
+				fmt.Printf("godiskanal %s\n", version.Version)
+				os.Exit(0)
+			}
+		},
 	}
 
+	rootCmd.Flags().BoolVarP(&showVersion, "version", "v", false, i18n.T("flag.version"))
 	rootCmd.Flags().StringVarP(&scanPath, "path", "p", home, i18n.T("flag.path"))
 	rootCmd.Flags().IntVarP(&topN, "top", "n", 20, i18n.T("flag.top"))
 	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, i18n.T("flag.interactive"))
@@ -69,10 +78,25 @@ func run(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	home, _ := os.UserHomeDir()
+	rawHome, _ := os.UserHomeDir()
+	home := macos.ResolveTargetHome(rawHome)
+	if !cmd.Flags().Changed("path") {
+		scanPath = macos.DefaultScanPath(home)
+	}
 	scanPath = expandHome(scanPath, home)
 
 	fmt.Printf("\033[1m%s\033[0m\n", i18n.T("app.title"))
+	targetHomes := macos.TargetHomes(home)
+	if macos.RunningAsRoot() {
+		if rawHome == "/var/root" && home != rawHome {
+			fmt.Println(i18n.Tf("root.home_hint", home))
+		} else if len(targetHomes) > 1 {
+			fmt.Println(i18n.Tf("root.multi_user", len(targetHomes)))
+		}
+		if !cmd.Flags().Changed("path") {
+			fmt.Println(i18n.Tf("root.scan_default", scanPath))
+		}
+	}
 
 	// 1. Disk info
 	diskInfo, err := macos.GetDiskInfo(scanPath)
@@ -138,7 +162,11 @@ func run(cmd *cobra.Command, args []string) error {
 			}
 			llmClient = llm.NewClient(key, model, baseURL)
 		}
-		m := tui.New(scanPath, sizeMap, llmClient)
+		var llmHints []tui.KnownHint
+		if llmClient != nil {
+			llmHints = tui.KnownHintsFromLocs(prepareKnownLocations(targetHomes, sizeMap, scanPath, minSize))
+		}
+		m := tui.New(scanPath, sizeMap, llmClient, llmHints, targetHomes)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("%s: %w", i18n.T("err.browser"), err)
@@ -174,18 +202,16 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	// 5. Known macOS locations
-	locs := macos.DefaultLocations(home)
-	macos.PopulateSizes(locs, sizeMap, scanPath)
-	ui.Header(i18n.T("known.header"))
-	for _, loc := range locs {
-		if !loc.Exists {
-			continue
-		}
-		ui.PrintKnownEntry(loc.Cleanable, loc.Name, displayPath(loc.Path, home), loc.Size)
+	displayLocs := prepareKnownLocations(targetHomes, sizeMap, scanPath, minSize)
+	ui.Header(i18n.Tf("known.header", len(displayLocs)))
+	for _, loc := range displayLocs {
+		ui.PrintKnownEntry(loc.Cleanable, loc.Name, displayPathForHomes(loc.Path, targetHomes), loc.Size)
 	}
 
 	// Time Machine snapshots
+	tmSnapshots := 0
 	if count, err := macos.TimeMachineSnapshotCount(); err == nil && count > 0 {
+		tmSnapshots = count
 		fmt.Println(i18n.Tf("tm.info", count))
 		fmt.Println(i18n.T("tm.delete"))
 	}
@@ -204,15 +230,37 @@ func run(cmd *cobra.Command, args []string) error {
 		if baseURL == "" {
 			baseURL = os.Getenv("OPENAI_BASE_URL")
 		}
+		baseURL = llm.ResolveBaseURL(baseURL)
 
 		ui.Header(i18n.T("llm.header"))
-		fmt.Println(i18n.Tf("llm.analyzing", model) + "\n")
+		fmt.Println(i18n.Tf("llm.model", model))
+		fmt.Println(i18n.Tf("llm.provider", llm.ProviderLabel(baseURL), baseURL))
+		fmt.Println(i18n.T("llm.analyzing") + "\n")
 
-		prompt := buildLLMPrompt(diskInfo, top, locs, home)
+		prompt := buildLLMPrompt(llmPromptInput{
+			ScanPath:      scanPath,
+			Homes:         targetHomes,
+			RunningAsRoot: macos.RunningAsRoot(),
+			Disk:          diskInfo,
+			Top:           top,
+			Known:         displayLocs,
+			NodeModules:   nmDirs,
+			TMSnapshots:   tmSnapshots,
+		})
 		client := llm.NewClient(key, model, baseURL)
-		usage, err := client.StreamAnalysis(prompt, os.Stdout)
+		var llmBuf strings.Builder
+		usage, err := client.StreamAnalysis(prompt, &llmBuf)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, i18n.Tf("llm.error", err))
+		} else if llmBuf.Len() > 0 {
+			if rendered, rerr := ui.RenderMarkdown(llmBuf.String()); rerr != nil {
+				fmt.Print(llmBuf.String())
+				if !strings.HasSuffix(llmBuf.String(), "\n") {
+					fmt.Println()
+				}
+			} else {
+				fmt.Print(rendered)
+			}
 		}
 		if usage != nil {
 			printLLMCost(usage, model)
@@ -221,7 +269,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// 7. Interactive cleanup (TUI)
 	if interactive {
-		m := tui.NewCleanup(locs, sizeMap)
+		m := tui.NewCleanup(displayLocs, sizeMap)
 		if !m.HasItems() {
 			fmt.Println(i18n.T("cleanup.no_items"))
 		} else {
@@ -231,51 +279,22 @@ func run(cmd *cobra.Command, args []string) error {
 			}
 		}
 	} else if !useLLM {
-		printQuickTips(locs)
+		printQuickTips(displayLocs)
 	}
 
 	return nil
 }
 
-// buildLLMPrompt creates the analysis prompt for the LLM.
-func buildLLMPrompt(disk *macos.DiskInfo, top []scanner.Entry, locs []macos.KnownLocation, home string) string {
-	var b strings.Builder
-
-	b.WriteString(i18n.T("llm.prompt.header"))
-
-	if disk != nil {
-		b.WriteString(i18n.Tf("llm.prompt.disk",
-			ui.FormatSize(disk.Total),
-			ui.FormatSize(disk.Used),
-			float64(disk.Used)/float64(disk.Total)*100,
-			ui.FormatSize(disk.Free),
-		))
+// prepareKnownLocations loads, sizes, and filters known macOS/dev paths for display and LLM hints.
+func prepareKnownLocations(targetHomes []string, sizeMap map[string]int64, scanPath string, minSize int64) []macos.KnownLocation {
+	locs := macos.AllKnownLocations(targetHomes)
+	if macos.RunningAsRoot() {
+		locs = append(locs, macos.SystemLocations()...)
 	}
-
-	b.WriteString(i18n.T("llm.prompt.top_dirs"))
-	for i, e := range top {
-		if i >= 15 {
-			break
-		}
-		b.WriteString(fmt.Sprintf("%d. %s — %s\n", i+1, displayPath(e.Path, home), ui.FormatSize(e.Size)))
-	}
-
-	b.WriteString(i18n.T("llm.prompt.known"))
-	for _, loc := range locs {
-		if !loc.Exists || loc.Size <= 0 {
-			continue
-		}
-		cleanable := ""
-		if loc.Cleanable {
-			cleanable = i18n.T("llm.prompt.cleanable")
-		}
-		b.WriteString(fmt.Sprintf("- **%s**: %s%s\n", loc.Name, ui.FormatSize(loc.Size), cleanable))
-		b.WriteString(i18n.Tf("llm.prompt.path", displayPath(loc.Path, home)))
-	}
-
-	b.WriteString(i18n.T("llm.prompt.request"))
-
-	return b.String()
+	enrichDisk := macos.RunningAsRoot() || len(targetHomes) > 1
+	macos.PopulateSizesEnriched(locs, sizeMap, scanPath, enrichDisk, 24)
+	macos.SortKnownBySize(locs)
+	return macos.FilterKnownForDisplay(locs, minSize)
 }
 
 // printQuickTips shows a brief summary of actionable items.
@@ -307,13 +326,37 @@ func printQuickTips(locs []macos.KnownLocation) {
 
 // displayPath shortens a path by replacing the home directory with ~.
 func displayPath(path, home string) string {
-	if path == home {
+	return displayPathForHomes(path, []string{home})
+}
+
+// displayPathForHomes replaces any known home prefix with ~user or ~.
+func displayPathForHomes(path string, homes []string) string {
+	best := ""
+	for _, home := range homes {
+		if home == "" {
+			continue
+		}
+		if path == home && len(home) > len(best) {
+			best = home
+		}
+		if strings.HasPrefix(path, home+"/") && len(home) > len(best) {
+			best = home
+		}
+	}
+	if best == "" {
+		return path
+	}
+	if path == best {
+		if filepath.Base(best) == "root" || best == "/var/root" {
+			return best
+		}
 		return "~"
 	}
-	if strings.HasPrefix(path, home+"/") {
-		return "~" + path[len(home):]
+	rel := path[len(best):]
+	if len(homes) > 1 {
+		return "~" + filepath.Base(best) + rel
 	}
-	return path
+	return "~" + rel
 }
 
 // printLLMCost prints token usage and estimated cost after an LLM call.

@@ -49,6 +49,7 @@ Environment variables:
 	"flag.api_key":        "API key (overrides OPENAI_API_KEY)",
 	"flag.api_url":        "Base API URL (overrides OPENAI_BASE_URL; default: https://api.openai.com/v1)",
 	"flag.model":          "LLM model",
+	"flag.version":        "Print version and exit",
 
 	// ── Errors ───────────────────────────────────────────────────────────────
 	"err.generic":     "Error: %v\n",
@@ -76,7 +77,12 @@ Environment variables:
 	// ── Top directories ──────────────────────────────────────────────────────
 	"top.header":          "TOP-%d DIRECTORIES",
 	"node_modules.header": "NODE_MODULES (%d found)",
-	"known.header":        "KNOWN LOCATIONS",
+	"known.header":        "KNOWN LOCATIONS (%d)",
+
+	// ── Root / multi-user ────────────────────────────────────────────────────
+	"root.home_hint":     "  \033[36mℹ Running as root — checking known locations for %s (not /var/root)\033[0m",
+	"root.multi_user":    "  \033[36mℹ Running as root — scanning known locations for %d user accounts\033[0m",
+	"root.scan_default":  "  \033[2mDefault scan path: %s (override with --path)\033[0m",
 
 	// ── Time Machine ─────────────────────────────────────────────────────────
 	"tm.info":   "\n  \033[36mℹ Time Machine: %d local snapshots\033[0m",
@@ -84,23 +90,62 @@ Environment variables:
 
 	// ── LLM ──────────────────────────────────────────────────────────────────
 	"llm.header":    "LLM ANALYSIS",
-	"llm.analyzing": "  \033[2mAnalyzing with %s...\033[0m",
+	"llm.model":     "  Model: \033[1m%s\033[0m",
+	"llm.provider":  "  API provider: \033[1m%s\033[0m  \033[2m(%s)\033[0m",
+	"llm.analyzing": "  \033[2mAnalyzing...\033[0m",
 	"llm.error":     "\n  \033[31mLLM Error: %v\033[0m",
 	"llm.tokens":    "\n  \033[2m— Tokens: %d in + %d out = %d total\033[0m",
 	"llm.cost_low":  "  \033[2m| cost: <$0.001\033[0m",
 	"llm.cost":      "  \033[2m| cost: $%.4f\033[0m",
 
 	// ── LLM prompts ─────────────────────────────────────────────────────────
-	"llm.prompt.header":    "## macOS Disk Analysis\n\n",
-	"llm.prompt.disk":      "**Disk:** %s total, %s used (%.0f%%), %s free\n\n",
-	"llm.prompt.top_dirs":  "### Top directories by size:\n",
-	"llm.prompt.known":     "\n### Known macOS locations:\n",
-	"llm.prompt.cleanable": " [cleanable]",
-	"llm.prompt.path":      "  Path: %s\n",
-	"llm.prompt.request":   "\nProvide specific recommendations for freeing space, sorted by impact. For each item, specify the expected amount of freed space and the exact command or action.",
+	"llm.prompt.header":       "## macOS Disk Analysis (godiskanal)\n\n",
+	"llm.prompt.scan":         "**Scan path:** %s\n",
+	"llm.prompt.root":         "**Mode:** running as root — includes system-wide and multi-user paths\n",
+	"llm.prompt.disk":         "**Disk:** %s total, %s used (%.0f%%), %s free\n\n",
+	"llm.prompt.top_dirs":     "### Top directories by size:\n",
+	"llm.prompt.node_modules": "\n### Large node_modules (≥200 MB):\n",
+	"llm.prompt.node_item":    "- %s — %s\n",
+	"llm.prompt.tm":           "\n**Time Machine:** %d local snapshots on disk (often several GB each). Delete only if you do not need rollback: `tmutil deletelocalsnapshots /`\n",
+	"llm.prompt.known":        "\n### Known macOS / dev locations (from scanner):\n",
+	"llm.prompt.cleanable":    " [cleanable in godiskanal -i]",
+	"llm.prompt.manual":       " [run suggested command — not safe for bulk delete]",
+	"llm.prompt.size_unknown": "size outside scan tree",
+	"llm.prompt.path":         "  Path: %s\n",
+	"llm.prompt.desc":         "  About: %s\n",
+	"llm.prompt.suggested":    "  Suggested: %s\n",
+	"llm.prompt.request": "\n\n## Your task\n" +
+		"Give **5–8** prioritized recommendations to free disk space. Use ONLY paths and sizes from the data above — do not invent folders.\n\n" +
+		"For each recommendation use exactly this block:\n" +
+		"### N. Short title (~estimated savings)\n" +
+		"- **Why:** one sentence — what this is and why it is large\n" +
+		"- **Path:** exact path from the data\n" +
+		"- **Risk:** low | medium | high — what breaks if done wrong\n" +
+		"- **Action:** exact terminal command or in-app steps (prefer \"Suggested:\" notes from the data over rm -rf)\n\n" +
+		"Rules:\n" +
+		"- Sort by impact (largest realistic savings first); skip items under ~50 MB unless the disk is critically full\n" +
+		"- For [cleanable in godiskanal -i] items, mention godiskanal -i as the safest option when applicable\n" +
+		"- For [run suggested command — not safe for bulk delete], give ONLY the suggested command — never recommend Finder trash or rm -rf on the whole folder\n" +
+		"- Do not recommend deleting /System, /usr, ~/Library/Mail, or active project source code\n" +
+		"- If Time Machine snapshots are listed, include them as a high-impact item when count > 0\n\n" +
+		"End with **Next steps:** one line mentioning godiskanal -i (interactive cleanup) and godiskanal -b --llm (browse with per-folder hints).",
 
 	"llm.system.describe": "You are a macOS disk cleanup expert. Give brief (2-4 sentences) PRACTICAL advice.\nDon't explain what this is abstractly — the user can see the path and size.\nInstead say specifically: can it be deleted, what happens after deletion,\nand if there's a proper cleanup method (command, app settings) — mention it.\nRespond in English.",
-	"llm.system.analyze": "You are a macOS expert helping users free up disk space.\nAnalyze the disk usage data and provide specific, actionable recommendations.\nPrioritize recommendations by the potential amount of freed space.\nUse markdown: headings, bold text, lists. Respond in English.\nBe specific: provide exact commands and paths for cleanup.",
+	"llm.system.describe.auto": "You are a macOS disk cleanup expert in godiskanal browser mode.\n" +
+		"The user browses folders; you see the selected path, sizes, and optional scanner hints.\n" +
+		"Reply in 2-3 short sentences: safe to delete or not, preferred cleanup command if any, largest child to inspect.\n" +
+		"Use scanner \"Suggested\" commands when present; never recommend rm -rf on whole Library folders.\n" +
+		"Respond in English.",
+	"llm.system.describe.analyze": "You are a macOS disk cleanup expert. The user requested deep analysis (i key) in godiskanal browser.\n" +
+		"Use only paths and sizes from the prompt. Prefer app-specific cleanup over bulk delete.\n" +
+		"Format: brief summary, then numbered steps with Risk (low/medium/high) and exact Action (command or UI).\n" +
+		"If a scanner hint says manual command only, give that command only — no Finder trash.\n" +
+		"Respond in English.",
+	"llm.system.analyze": "You are a macOS disk cleanup expert. The user ran godiskanal --llm after a real filesystem scan.\n" +
+		"Ground every recommendation in the provided scan data only.\n" +
+		"Prefer official or app-specific cleanup commands over deleting entire Library folders.\n" +
+		"Be conservative with risk ratings; warn before destructive actions.\n" +
+		"Use clear markdown. Respond in English.",
 	"llm.empty_response": "empty response from API",
 
 	// ── Tips ─────────────────────────────────────────────────────────────────
@@ -128,8 +173,10 @@ Environment variables:
 	"browser.footer.desc":  "  i describe",
 	"browser.footer.quit":  "  q quit  ? help",
 
-	"browser.confirm":      "\n  Delete %d item(s) (%s)?\n\n",
-	"browser.confirm_yes":  "\n  [y] Yes, delete  [any other] Cancel\n",
+	"browser.confirm":            "\n  Delete %d item(s) (%s)?\n\n",
+	"browser.confirm.app_related": "  Including related app data (caches, preferences, containers, …):\n",
+	"browser.confirm.related":     "  — related to %s",
+	"browser.confirm_yes":        "\n  [y] Yes, delete  [any other] Cancel\n",
 	"browser.deleting":     "\n  ⟳ Deleting %d item(s) (%s)...\n\n",
 	"browser.please_wait":  "\n  Please wait...\n",
 
@@ -146,6 +193,7 @@ Environment variables:
   Space           Mark for deletion
   d               Delete marked (or current)
   D               Delete current item
+      Deleting .app from Applications also offers related Library data
 `,
 	"browser.help.llm": `  i               Detailed content analysis
   I               Return to auto-description
@@ -159,10 +207,21 @@ Environment variables:
 	"browser.llm.auto_header": "Selected item: %s / %s\nType: %s | Size: %s\n",
 	"browser.llm.auto_siblings": "\nCurrent directory contents (top by size):\n",
 	"browser.llm.auto_children": "\nSelected folder contents (top by size):\n",
-	"browser.llm.auto_ask": "\nGive practical advice in 2-3 sentences:\n— Can it be deleted (fully or partially) and what happens?\n— If there's a proper cleanup method (command, app menu) — mention it.\n— If something inside is especially large, point it out.",
-	"browser.llm.analyze":   "Analysis: %s\nType: %s\nSize: %s\n",
-	"browser.llm.contents":  "\nContents (top 15 by size):\n",
-	"browser.llm.questions": "\nAnswer in English:\n1. What is this and what is it for?\n2. What can be safely deleted and how much space will be freed?\n3. What are the risks of deletion?\n4. Specific commands or paths for cleanup.",
+	"browser.llm.auto_ask": "\nBrief advice (2-3 sentences). Use scanner hints if present.\n" +
+		"Say: delete or not, best cleanup command, and the largest sub-item worth opening first.",
+	"browser.llm.analyze":    "Deep analysis: %s\nType: %s | Total size: %s\n",
+	"browser.llm.contents":   "\nContents (top 15 by size):\n",
+	"browser.llm.more_entries": "  ... (+%d more)\n",
+	"browser.llm.known_match":    "\nScanner knows this location: **%s**\n",
+	"browser.llm.known_desc":     "  About: %s\n",
+	"browser.llm.known_suggested": "  Suggested cleanup: %s\n",
+	"browser.llm.known_manual":   "  Note: use the suggested command only — not bulk delete in Finder.\n",
+	"browser.llm.known_cleanable": "  Note: also removable via godiskanal -i when run from a full scan.\n",
+	"browser.llm.questions": "\nStructured answer:\n" +
+		"1. **What it is** (one sentence)\n" +
+		"2. **Safe cleanup** — estimated space and exact command or app steps (prefer Suggested above)\n" +
+		"3. **Risks** — low / medium / high and what breaks\n" +
+		"4. **Next** — largest child folder to open here, if any",
 
 	// ── Cleanup TUI ──────────────────────────────────────────────────────────
 	"cleanup.header":       "godiskanal — Interactive cleanup",
@@ -312,4 +371,14 @@ Environment variables:
 	"loc.Docker.note":               "docker system prune -a --volumes",
 	"loc.Homebrew cache.desc":       "Homebrew cache",
 	"loc.Homebrew cache.note":       "brew cleanup",
+	"loc.System Caches.desc":        "System-wide application caches",
+	"loc.System Caches.note":        "Remove only cache subfolders you recognize; apps will rebuild caches",
+	"loc.System Logs.desc":          "System and service log files",
+	"loc.System Logs.note":          "Old logs are usually safe to delete; macOS recreates them as needed",
+	"loc.Temporary files.desc":      "Temporary files in /private/tmp",
+	"loc.Temporary files.note":      "Safe to clear when no installers or apps are running",
+	"loc.User temp caches.desc":     "Per-user temporary files and caches (varfolders)",
+	"loc.User temp caches.note":     "Mixed per-user data — inspect large subfolders before deleting",
+	"loc.Installer leftovers.desc":  "macOS update installer payloads",
+	"loc.Installer leftovers.note":  "May be large; remove only if updates are fully installed",
 }

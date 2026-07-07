@@ -618,25 +618,67 @@ func homebrewCachePath() string {
 // PopulateSizes fills in the Size and Exists fields for each location.
 // sizeMap is the result of scanning (path → total size).
 // scanRoot is the root directory that was scanned.
-// Locations outside scanRoot are shown as existing (if present) but with size=-1.
+// Locations outside scanRoot are shown as existing (if present) but with size=-1
+// unless enrichDisk is true, in which case DirSize is used for up to enrichLimit paths.
 func PopulateSizes(locs []KnownLocation, sizeMap map[string]int64, scanRoot string) {
+	PopulateSizesEnriched(locs, sizeMap, scanRoot, false, 0)
+}
+
+// PopulateSizesEnriched is like PopulateSizes but can measure a few unknown paths on disk.
+func PopulateSizesEnriched(locs []KnownLocation, sizeMap map[string]int64, scanRoot string, enrichDisk bool, enrichLimit int) {
+	scanRoot = filepath.Clean(scanRoot)
+	var needDisk []int
+
 	for i := range locs {
-		path := locs[i].Path
-		if size, ok := sizeMap[path]; ok {
+		path := filepath.Clean(locs[i].Path)
+		if size, ok := lookupSize(path, sizeMap); ok {
 			locs[i].Size = size
 			locs[i].Exists = true
-		} else if strings.HasPrefix(path, scanRoot+"/") || path == scanRoot {
+			continue
+		}
+		if underScanRoot(path, scanRoot) {
 			if _, err := os.Stat(path); err == nil {
 				locs[i].Exists = true
 				locs[i].Size = 0
 			}
-		} else {
-			if _, err := os.Stat(path); err == nil {
-				locs[i].Exists = true
-				locs[i].Size = -1
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			locs[i].Exists = true
+			locs[i].Size = -1
+			if enrichDisk && locs[i].Cleanable {
+				needDisk = append(needDisk, i)
 			}
 		}
 	}
+
+	if !enrichDisk || enrichLimit <= 0 {
+		return
+	}
+	for _, i := range needDisk {
+		if enrichLimit <= 0 {
+			break
+		}
+		locs[i].Size = DirSize(locs[i].Path)
+		enrichLimit--
+	}
+}
+
+func underScanRoot(path, scanRoot string) bool {
+	if path == scanRoot {
+		return true
+	}
+	if strings.HasPrefix(path, scanRoot+"/") {
+		return true
+	}
+	// macOS: scanning /System/Volumes/Data should cover /Users/... known paths
+	if strings.HasPrefix(scanRoot, "/System/Volumes/Data") && strings.HasPrefix(path, "/Users/") {
+		return true
+	}
+	if scanRoot == "/" && (strings.HasPrefix(path, "/Users/") || strings.HasPrefix(path, "/private/") || strings.HasPrefix(path, "/Library/")) {
+		return true
+	}
+	return false
 }
 
 // DirSize calculates the total size of a directory tree.

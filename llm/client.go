@@ -71,10 +71,7 @@ func (u *Usage) Cost(model string) (float64, bool) {
 
 // NewClient creates a new LLM client. If baseURL is empty, the default OpenAI endpoint is used.
 func NewClient(apiKey, model, baseURL string) *Client {
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
+	baseURL = ResolveBaseURL(baseURL)
 	return &Client{
 		APIKey:  apiKey,
 		Model:   model,
@@ -99,16 +96,26 @@ type chatRequest struct {
 	StreamOptions *streamOptions `json:"stream_options,omitempty"` // only for streaming
 }
 
-// Describe sends a single-turn completion request and returns the full response.
-// Used by the TUI browser to explain what a directory/file is.
+// Describe sends a single-turn completion with the default browser system prompt.
 func (c *Client) Describe(userPrompt string) (string, error) {
+	return c.describe(userPrompt, i18n.T("llm.system.describe"))
+}
+
+// DescribeAuto is the debounced side-panel hint (2–3 sentences).
+func (c *Client) DescribeAuto(userPrompt string) (string, error) {
+	return c.describe(userPrompt, i18n.T("llm.system.describe.auto"))
+}
+
+// DescribeAnalyze is the deep analysis triggered by i in the browser.
+func (c *Client) DescribeAnalyze(userPrompt string) (string, error) {
+	return c.describe(userPrompt, i18n.T("llm.system.describe.analyze"))
+}
+
+func (c *Client) describe(userPrompt, systemPrompt string) (string, error) {
 	req := chatRequest{
 		Model: c.Model,
 		Messages: []message{
-			{
-				Role:    "system",
-				Content: i18n.T("llm.system.describe"),
-			},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
 		Stream: false,
