@@ -99,7 +99,7 @@ Environment variables:
 	"llm.prompt.path":      "  Path: %s\n",
 	"llm.prompt.request":   "\nProvide specific recommendations for freeing space, sorted by impact. For each item, specify the expected amount of freed space and the exact command or action.",
 
-	"llm.system.describe": "You are a macOS expert. Briefly (2-4 sentences) explain what this path\n(directory or file) is and whether it is safe to delete to free disk space.\nRespond in English. If the path is clearly system-critical, warn about it.",
+	"llm.system.describe": "You are a macOS disk cleanup expert. Give brief (2-4 sentences) PRACTICAL advice.\nDon't explain what this is abstractly — the user can see the path and size.\nInstead say specifically: can it be deleted, what happens after deletion,\nand if there's a proper cleanup method (command, app settings) — mention it.\nRespond in English.",
 	"llm.system.analyze": "You are a macOS expert helping users free up disk space.\nAnalyze the disk usage data and provide specific, actionable recommendations.\nPrioritize recommendations by the potential amount of freed space.\nUse markdown: headings, bold text, lists. Respond in English.\nBe specific: provide exact commands and paths for cleanup.",
 	"llm.empty_response": "empty response from API",
 
@@ -156,7 +156,10 @@ Environment variables:
 	// ── Browser LLM prompts ─────────────────────────────────────────────────
 	"browser.llm.file":      "file",
 	"browser.llm.dir":       "directory",
-	"browser.llm.auto":      "Path: %s\nType: %s\nSize: %s\n\nBriefly explain what this is and whether it's safe to delete.",
+	"browser.llm.auto_header": "Selected item: %s / %s\nType: %s | Size: %s\n",
+	"browser.llm.auto_siblings": "\nCurrent directory contents (top by size):\n",
+	"browser.llm.auto_children": "\nSelected folder contents (top by size):\n",
+	"browser.llm.auto_ask": "\nGive practical advice in 2-3 sentences:\n— Can it be deleted (fully or partially) and what happens?\n— If there's a proper cleanup method (command, app menu) — mention it.\n— If something inside is especially large, point it out.",
 	"browser.llm.analyze":   "Analysis: %s\nType: %s\nSize: %s\n",
 	"browser.llm.contents":  "\nContents (top 15 by size):\n",
 	"browser.llm.questions": "\nAnswer in English:\n1. What is this and what is it for?\n2. What can be safely deleted and how much space will be freed?\n3. What are the risks of deletion?\n4. Specific commands or paths for cleanup.",

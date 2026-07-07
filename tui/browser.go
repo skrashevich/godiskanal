@@ -446,7 +446,7 @@ func (m *Model) autoDescCmd() tea.Cmd {
 	m.llmPanelLoading = true
 	m.llmPanelText = ""
 	m.llmPanelIsAnalysis = false
-	return cmdAutoDesc(m.llmClient, m.entries[m.cursor], m.llmDescReqID)
+	return cmdAutoDesc(m.llmClient, m.entries[m.cursor], m.llmDescReqID, m.entries, m.current, m.sizeCache)
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -807,17 +807,84 @@ func cmdDelete(paths []string, sizes map[string]int64) tea.Cmd {
 }
 
 // cmdAutoDesc fires after a short debounce delay and returns a brief description.
-func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int) tea.Cmd {
+// It includes directory contents and sibling context for more useful LLM responses.
+func cmdAutoDesc(client *llm.Client, entry DirEntry, reqID int, siblings []DirEntry, parentPath string, sizeCache map[string]int64) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(450 * time.Millisecond) // debounce: ignore stale requests
 		kind := i18n.T("browser.llm.file")
 		if entry.IsDir {
 			kind = i18n.T("browser.llm.dir")
 		}
-		prompt := i18n.Tf("browser.llm.auto",
-			entry.Path, kind, ui.FormatSize(entry.Size),
-		)
-		text, err := client.Describe(prompt)
+
+		var sb strings.Builder
+		sb.WriteString(i18n.Tf("browser.llm.auto_header",
+			parentPath, entry.Name, kind, ui.FormatSize(entry.Size)))
+
+		// Add sibling context (top entries in the same directory)
+		if len(siblings) > 0 {
+			sb.WriteString(i18n.T("browser.llm.auto_siblings"))
+			for i, s := range siblings {
+				if i >= 7 {
+					break
+				}
+				marker := "  "
+				if s.Path == entry.Path {
+					marker = "► "
+				}
+				suffix := ""
+				if s.IsDir {
+					suffix = "/"
+				}
+				sb.WriteString(fmt.Sprintf("  %s%-35s %s\n",
+					marker, s.Name+suffix, ui.FormatSize(s.Size)))
+			}
+		}
+
+		// Add children for directories
+		if entry.IsDir {
+			children, err := os.ReadDir(entry.Path)
+			if err == nil && len(children) > 0 {
+				type item struct {
+					name  string
+					size  int64
+					isDir bool
+				}
+				var items []item
+				for _, c := range children {
+					if c.Type()&os.ModeSymlink != 0 {
+						continue
+					}
+					cp := filepath.Join(entry.Path, c.Name())
+					var s int64
+					if c.IsDir() {
+						s = sizeCache[cp]
+					} else if info, err2 := c.Info(); err2 == nil {
+						s = info.Size()
+					}
+					items = append(items, item{c.Name(), s, c.IsDir()})
+				}
+				sort.Slice(items, func(i, j int) bool {
+					return items[i].size > items[j].size
+				})
+				sb.WriteString(i18n.T("browser.llm.auto_children"))
+				for i, it := range items {
+					if i >= 8 {
+						sb.WriteString(fmt.Sprintf("  ... (+%d ещё)\n", len(items)-8))
+						break
+					}
+					suffix := ""
+					if it.isDir {
+						suffix = "/"
+					}
+					sb.WriteString(fmt.Sprintf("  %-35s %s\n",
+						it.name+suffix, ui.FormatSize(it.size)))
+				}
+			}
+		}
+
+		sb.WriteString(i18n.T("browser.llm.auto_ask"))
+
+		text, err := client.Describe(sb.String())
 		return autoDescMsg{reqID: reqID, text: text, err: err}
 	}
 }
